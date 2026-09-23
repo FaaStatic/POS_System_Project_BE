@@ -1,0 +1,45 @@
+# Setiap key bisa di-override lewat env var: titik jadi underscore, huruf
+# besar (database.pass -> DATABASE_PASS).
+server:
+  port:
+  name:
+  env:
+  host:
+  # IP/CIDR reverse proxy yang dipercaya. Loopback (nginx di host yang sama)
+  # selalu dipercaya. Isi bila proxy ada di host/network lain (mis. IP container
+  # nginx) agar c.IP() membaca X-Forwarded-For; dari sumber lain header itu
+  # diabaikan, jadi client tidak bisa memalsukan IP-nya ke rate limiter.
+  trusted_proxies: []
+database:
+  user:
+  pass:
+  port:
+  dbname:
+  host:
+  sslmode:
+  time_zone:
+  # Opsional. Kosong/0 = pakai default (max_open 10, max_idle 5, lifetime 60m).
+  # Prefork aktif: tiap proses punya pool sendiri, jadi N proses membuka hingga
+  # N×max_open_conns. Naikkan hanya selama totalnya masih di bawah
+  # max_connections Postgres.
+  max_open_conns:
+  max_idle_conns:
+  conn_max_lifetime_minutes:
+redis:
+  url:
+  db:
+  username:
+  password:
+  port:
+  host:
+jwt:
+  secret:
+  # Nilai dalam DETIK: token_ttl 3600 = 1 jam; refresh_token_ttl 604800 = 7 hari.
+  token_ttl:
+  refresh_token_ttl:
+midtrans:
+  # Opsional: kosong = route pembayaran online membalas 503.
+  server_key:
+  environment:
+firebase:
+  google_application_credentials:
