@@ -69,11 +69,36 @@ func (h *TransactionHandler) Add(c fiber.Ctx) error {
 //	@Failure		500				{object}	response.APIResponse
 //	@Router			/api/transactions [get]
 func (h *TransactionHandler) List(c fiber.Ctx) error {
+	return h.listTransactions(c, "")
+}
+
+// ListByCustomer godoc
+//
+//	@Summary		List customer transactions
+//	@Description	Fetches a customer's transactions, newest first, with keyset pagination.
+//	@Tags			Transactions
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id				path		string	true	"Customer ID"
+//	@Param			type_payment	query		int		false	"Payment type (0=tunai,1=hutang,2=transfer,3=qris)"
+//	@Param			limit			query		int		false	"Page size (1-100, default 10)"
+//	@Param			after_time		query		string	false	"Time cursor for pagination"
+//	@Param			after_id		query		string	false	"ID cursor for pagination"
+//	@Success		200				{object}	response.APIResponse
+//	@Failure		400				{object}	response.APIResponse
+//	@Failure		500				{object}	response.APIResponse
+//	@Router			/api/customers/{id}/transactions [get]
+func (h *TransactionHandler) ListByCustomer(c fiber.Ctx) error {
+	return h.listTransactions(c, c.Params("id"))
+}
+
+func (h *TransactionHandler) listTransactions(c fiber.Ctx, customerID string) error {
 	var req requestdto.FilterTransactionRequest
 	if err := bindQuery(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
 	}
 	req.UserId = middleware.GetUserID(c)
+	req.CustomerID = customerID
 	if err := validate.Validate(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}

@@ -11,6 +11,14 @@ import (
 	"gorm.io/gorm"
 )
 
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+// likeContains membungkus s untuk `LIKE ? ESCAPE '\'`, sehingga % dan _ dari
+// input user dicari apa adanya, bukan sebagai wildcard.
+func likeContains(s string) string {
+	return "%" + likeEscaper.Replace(s) + "%"
+}
+
 func pageParams(limit int, order string) (int, string) {
 	if limit <= 0 || limit > 100 {
 		limit = 10

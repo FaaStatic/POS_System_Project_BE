@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -210,9 +209,11 @@ func (t *transactionRepository) GetAllTransaction(ctx context.Context, filter do
 
 	query := t.db.WithContext(ctx).Model(&domain.Transactions{}).Preload("TransactionDetail")
 
+	if filter.CustomerID != nil {
+		query = query.Where("customer_id = ?", *filter.CustomerID)
+	}
 	if filter.NoInvoices != "" {
-		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(filter.NoInvoices)
-		query = query.Where("no_invoice LIKE ? ESCAPE '\\'", "%"+escaped+"%")
+		query = query.Where("no_invoice LIKE ? ESCAPE '\\'", likeContains(filter.NoInvoices))
 	}
 	if filter.TypeTrx != nil {
 		query = query.Where("payment_type = ?", *filter.TypeTrx)
@@ -241,6 +242,8 @@ func monthRange(month, year int) (time.Time, time.Time) {
 	return start, start.AddDate(0, 1, 0)
 }
 
+// storeDate harus sezona dengan domain.StoreLocation (WIB, UTC+7) yang dipakai
+// monthRange; ubah keduanya bersamaan.
 func storeDate(col string) string {
 	return "(" + col + " AT TIME ZONE 'Asia/Jakarta')::date"
 }

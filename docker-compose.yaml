@@ -1,0 +1,88 @@
+x-app: &app
+  build:
+    context: .
+    dockerfile: .dockerfile
+  environment:
+    APP_ENV: ${APP_ENV:?pakai make docker-up}
+    DATABASE_HOST: postgres
+    DATABASE_PORT: "5432"
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    SERVER_PREFORK: "false"
+    DATABASE_PASS_FILE: /run/secrets/database_pass
+    REDIS_PASSWORD_FILE: /run/secrets/redis_password
+    JWT_SECRET_FILE: /run/secrets/jwt_secret
+    MIDTRANS_SERVER_KEY_FILE: /run/secrets/midtrans_server_key
+    FIREBASE_GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase
+  secrets:
+    - database_pass
+    - redis_password
+    - jwt_secret
+    - midtrans_server_key
+    - firebase
+  volumes:
+    - ./.docker/${APP_ENV}/app.yaml:/app/.config.${APP_ENV}.yaml:ro
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:?}
+      POSTGRES_PASSWORD_FILE: /run/secrets/database_pass
+      POSTGRES_DB: ${DATABASE_DBNAME:?}
+    secrets:
+      - database_pass
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "/run/secrets/redis_conf"]
+    secrets:
+      - redis_conf
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -qE 'PONG|NOAUTH'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  app:
+    <<: *app
+    stop_grace_period: 15s
+    ports:
+      - "${SERVER_PORT:?}:${SERVER_PORT:?}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+secrets:
+  database_pass:
+    file: .docker/${APP_ENV}/database_pass
+  redis_password:
+    file: .docker/${APP_ENV}/redis_password
+  jwt_secret:
+    file: .docker/${APP_ENV}/jwt_secret
+  midtrans_server_key:
+    file: .docker/${APP_ENV}/midtrans_server_key
+  redis_conf:
+    file: .docker/${APP_ENV}/redis.conf
+  firebase:
+    file: ./${FIREBASE_GOOGLE_APPLICATION_CREDENTIALS:?}
+
+volumes:
+  postgres-data:

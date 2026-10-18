@@ -119,7 +119,7 @@ var serverRun = &cobra.Command{
 			zap.String("port", envConf.App.Port),
 		)
 
-		if err := app.Listen(":"+envConf.App.Port, fiberconfig.GetFiberConfigListener(envConf.App.Env, rootCtx)); err != nil {
+		if err := app.Listen(":"+envConf.App.Port, fiberconfig.GetFiberConfigListener(envConf.App.Env, envConf.App.Prefork, rootCtx)); err != nil {
 			loggerconfig.Logger.Fatal("server error", zap.Error(err))
 		}
 	},

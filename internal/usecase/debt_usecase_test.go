@@ -49,6 +49,10 @@ func (f *fakeDebtRepo) GetDebtByID(ctx context.Context, id uuid.UUID) (*domain.D
 	return f.getByIDResult, f.getByIDErr
 }
 
+func (f *fakeDebtRepo) GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
+	return f.getByIDResult, f.getByIDErr
+}
+
 func (f *fakeDebtRepo) GetAllDebt(ctx context.Context, filter domain.FilterDebt) (*domain.DebtsPaginated, error) {
 	return f.getAllResult, f.getAllErr
 }

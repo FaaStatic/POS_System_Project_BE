@@ -1,0 +1,9 @@
+.git
+.github
+*.md
+docs/swagger.json
+docs/swagger.yaml
+.config.*.yaml
+*.json
+!swagger.json
+.docker/

@@ -1,6 +1,7 @@
 package responsedto
 
 type DebtResponseDto struct {
+	CustomerID      string                `json:"customer_id"`
 	NameCustomer    string                `json:"name_customer"`
 	TotalDebt       int64                 `json:"total_debt"`
 	RemainingDebt   int64                 `json:"remaining_debt"`

@@ -71,9 +71,9 @@ func GetFiberConfig(logger *zap.Logger, appName string, trustedProxies []string)
 	}
 }
 
-func GetFiberConfigListener(env string, gracefulCtx context.Context) fiber.ListenConfig {
+func GetFiberConfigListener(env string, prefork bool, gracefulCtx context.Context) fiber.ListenConfig {
 	return fiber.ListenConfig{
-		EnablePrefork:     true,
+		EnablePrefork:     prefork,
 		EnablePrintRoutes: env == "development",
 		TLSMinVersion:     tls.VersionTLS12,
 		GracefulContext:   gracefulCtx,

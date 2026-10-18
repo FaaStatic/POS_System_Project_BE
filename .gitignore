@@ -31,3 +31,4 @@ Dockerfile
 docker-compose.yml
 .opencode
 *.md
+.docker/

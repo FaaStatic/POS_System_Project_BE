@@ -17,7 +17,7 @@ import (
 func InitDB(config envconfig.DBConfig, log *zap.Logger, env string) (*gorm.DB, error) {
 	dsn := "host=" + dsnValue(config.Host) + " user=" + dsnValue(config.User) + " password=" + dsnValue(config.Password) +
 		" dbname=" + dsnValue(config.DBName) + " port=" + dsnValue(config.Port) + " sslmode=" + dsnValue(config.SSLMode) +
-		" TimeZone=" + dsnValue(config.TimeZone) + " statement_timeout=30000 lock_timeout=10000"
+		" TimeZone=" + config.TimeZone + " statement_timeout=30000 lock_timeout=10000"
 
 	gormLog := zaplogger.NewGormZapLogger(log)
 	if env == "production" {

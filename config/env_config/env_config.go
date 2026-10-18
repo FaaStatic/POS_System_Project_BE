@@ -28,6 +28,7 @@ type AppConfig struct {
 	Env            string
 	Host           string
 	TrustedProxies []string
+	Prefork        bool
 }
 
 type DBConfig struct {
@@ -86,9 +87,13 @@ func InitEnvConfig(log *zap.Logger) (*Config, error) {
 	viper.AddConfigPath(".")
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	viper.SetDefault("server.prefork", true)
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
+	}
+	if err := loadSecretFiles(); err != nil {
+		return nil, err
 	}
 
 	cfg := &Config{
@@ -98,6 +103,7 @@ func InitEnvConfig(log *zap.Logger) (*Config, error) {
 			Env:            viper.GetString("server.env"),
 			Host:           viper.GetString("server.host"),
 			TrustedProxies: viper.GetStringSlice("server.trusted_proxies"),
+			Prefork:        viper.GetBool("server.prefork"),
 		},
 		DB: DBConfig{
 			Host:                   viper.GetString("database.host"),
@@ -145,6 +151,27 @@ func InitEnvConfig(log *zap.Logger) (*Config, error) {
 	return cfg, nil
 }
 
+// Pola _FILE seperti image Postgres: JWT_SECRET_FILE=/run/secrets/jwt_secret
+// mengisi jwt.secret dari file, jadi nilai secret tidak pernah ada di env
+// container (docker inspect hanya melihat path-nya).
+var secretKeys = []string{"database.pass", "redis.password", "jwt.secret", "midtrans.server_key"}
+
+func loadSecretFiles() error {
+	for _, key := range secretKeys {
+		envName := strings.ToUpper(strings.ReplaceAll(key, ".", "_")) + "_FILE"
+		path := os.Getenv(envName)
+		if path == "" {
+			continue
+		}
+		secret, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", envName, err)
+		}
+		viper.Set(key, strings.TrimRight(string(secret), "\r\n"))
+	}
+	return nil
+}
+
 func (c *Config) validate() error {
 	required := []struct {
 		value string
@@ -153,6 +180,7 @@ func (c *Config) validate() error {
 		{c.App.Port, "server.port"},
 		{c.App.Env, "server.env"},
 		{c.DB.Host, "database.host"},
+		{c.DB.TimeZone, "database.time_zone"},
 		{c.DB.Port, "database.port"},
 		{c.DB.User, "database.user"},
 		{c.DB.Password, "database.pass"},

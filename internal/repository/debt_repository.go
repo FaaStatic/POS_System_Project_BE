@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,8 +22,16 @@ func NewDebtRepository(db *gorm.DB) domain.DebtRepository {
 }
 
 func (d *debtRepository) GetDebtByID(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
+	return d.getDebt(ctx, id, "Transactions")
+}
+
+func (d *debtRepository) GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
+	return d.getDebt(ctx, id, "DebtPayments.User")
+}
+
+func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, preload string) (*domain.Debts, error) {
 	var debt domain.Debts
-	result := d.db.WithContext(ctx).Preload("Customer").Preload("Transactions").Preload("DebtPayments.User").Where("id = ?", id).First(&debt)
+	result := d.db.WithContext(ctx).Preload("Customer").Preload(preload).Where("id = ?", id).First(&debt)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, domain.NotFound(fmt.Sprintf("debt with id %s not found", id))
@@ -203,13 +210,15 @@ func (d *debtRepository) PayDebt(ctx context.Context, debtID uuid.UUID, payment 
 func (d *debtRepository) GetAllDebt(ctx context.Context, filter domain.FilterDebt) (*domain.DebtsPaginated, error) {
 	limit, order := pageParams(filter.Limit, filter.Order)
 
-	query := d.db.Preload("Customer").Preload("Transactions").WithContext(ctx).Model(&domain.Debts{})
+	// Transaksi tidak di-preload: satu hutang terbuka terus menampung transaksi
+	// hutang customer, jadi jumlahnya tak terbatas. Ambil per customer lewat
+	// GET /api/customers/:id/transactions (berhalaman).
+	query := d.db.WithContext(ctx).Preload("Customer").Model(&domain.Debts{})
 
 	if filter.Search != "" {
-		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(filter.Search)
 		query = query.Select("debts.*").
 			Joins("JOIN customers ON customers.id = debts.customer_id AND customers.deleted_at IS NULL").
-			Where("customers.name LIKE ? ESCAPE '\\'", "%"+escaped+"%")
+			Where("customers.name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
 	}
 
 	if filter.CustomerID != uuid.Nil {
