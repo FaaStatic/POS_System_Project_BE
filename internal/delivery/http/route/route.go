@@ -65,6 +65,7 @@ func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log
 		customers.Post("", h.Customer.Add)
 		customers.Get("", h.Customer.List)
 		customers.Get("/:id", h.Customer.Get)
+		customers.Get("/:id/transactions", h.Transaction.ListByCustomer)
 		customers.Put("/:id", h.Customer.Update)
 		customers.Delete("/:id", onlySuper, h.Customer.Delete)
 

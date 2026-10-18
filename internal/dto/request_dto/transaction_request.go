@@ -22,6 +22,7 @@ type GetTransactionRequest struct {
 
 type FilterTransactionRequest struct {
 	UserId        string  `query:"user_id" validate:"required"`
+	CustomerID    string  `query:"-" validate:"omitempty,uuid"`
 	DateStart     *string `query:"date_start,omitempty"`
 	DateEnd       *string `query:"date_end,omitempty"`
 	TypePayment   *int    `query:"type_payment" validate:"omitempty,oneof=0 1 2 3"`

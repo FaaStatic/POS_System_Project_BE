@@ -7,7 +7,6 @@ import (
 	"math"
 	"shop_project_be/internal/domain"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -89,14 +88,9 @@ func (p *productRepository) AddBulkProduct(ctx context.Context, products []*doma
 		return nil, err
 	}
 
-	conflictSkipped := len(newProducts) - int(inserted)
-	if conflictSkipped < 0 {
-		conflictSkipped = 0
-	}
-
 	return &domain.BulkInsertResult{
 		TotalInserted: int(inserted),
-		TotalSkipped:  len(skippedSKUs) + conflictSkipped,
+		TotalSkipped:  len(skippedSKUs) + len(newProducts) - int(inserted),
 		SkippedSKUs:   skippedSKUs,
 	}, nil
 }
@@ -131,8 +125,7 @@ func (p *productRepository) GetAllProduct(ctx context.Context, filter domain.Fil
 	}
 
 	if filter.Search != "" {
-		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(filter.Search)
-		query = query.Where("product_name LIKE ? ESCAPE '\\'", "%"+escaped+"%")
+		query = query.Where("product_name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
 	}
 
 	var items []*domain.Products

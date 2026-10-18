@@ -48,6 +48,7 @@ func toDebtResponse(debt *domain.Debts) responsedto.DebtResponseDto {
 	}
 
 	return responsedto.DebtResponseDto{
+		CustomerID:      debt.CustomerID.String(),
 		NameCustomer:    debt.Customer.Name,
 		TotalDebt:       debt.TotalDebt,
 		RemainingDebt:   debt.RemainingDebt,
@@ -212,7 +213,7 @@ func (d *debtUsecase) PrintReportDebtCustomer(ctx context.Context, request *requ
 		return nil, domain.InvalidID("invalid debt id format")
 	}
 
-	debt, err := d.debtRepo.GetDebtByID(ctx, id)
+	debt, err := d.debtRepo.GetDebtWithPayments(ctx, id)
 	if err != nil {
 		d.log.Error("failed to get debt", zap.Error(err))
 		if errors.Is(err, domain.ErrNotFound) {

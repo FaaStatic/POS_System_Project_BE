@@ -40,7 +40,7 @@ type CustomersPaginated struct {
 
 type CustomerRepository interface {
 	GetCustomer(ctx context.Context, id uuid.UUID) (*Customers, error)
-	UpdateCustomer(ctx context.Context, id uuid.UUID, customer *Customers) error
+	UpdateCustomer(ctx context.Context, id uuid.UUID, fields map[string]any) error
 	AddCustomer(ctx context.Context, customer *Customers) error
 	DeleteCustomer(ctx context.Context, id uuid.UUID) error
 	GetAllCustomer(ctx context.Context, filter FilterCustomer) (*CustomersPaginated, error)

@@ -6,10 +6,11 @@ type AddCustomer struct {
 	Address      string `json:"address,omitempty"`
 }
 type UpdateCustomer struct {
-	CustomerId   string `json:"customer_id" validate:"required,uuid"`
-	CustomerName string `json:"customer_name,omitempty"`
-	PhoneNumber  string `json:"phone_number,omitempty"`
-	Address      string `json:"address,omitempty"`
+	CustomerId string `json:"customer_id" validate:"required,uuid"`
+	// Pointer: nil = tidak diubah, "" = dikosongkan.
+	CustomerName *string `json:"customer_name,omitempty" validate:"omitempty,min=1"`
+	PhoneNumber  *string `json:"phone_number,omitempty"`
+	Address      *string `json:"address,omitempty"`
 }
 
 type DeleteCustomer struct {

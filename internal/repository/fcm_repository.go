@@ -26,10 +26,7 @@ func (d *deviceTokenRepository) DeleteDeviceToken(ctx context.Context, tokens []
 }
 
 func (d *deviceTokenRepository) DetachDeviceTokenFromUser(ctx context.Context, tokens string) error {
-	return d.db.WithContext(ctx).Model(&domain.DeviceToken{}).Where("token = ?", tokens).Updates(map[string]any{
-		"user_id":    nil,
-		"updated_at": time.Now(),
-	}).Error
+	return d.db.WithContext(ctx).Model(&domain.DeviceToken{}).Where("token = ?", tokens).Update("user_id", nil).Error
 }
 
 func (d *deviceTokenRepository) GetDeviceTokensByUserID(ctx context.Context, userID uuid.UUID) ([]string, error) {
@@ -45,6 +42,6 @@ func (d *deviceTokenRepository) RegisterDeviceToken(ctx context.Context, dt *dom
 	dt.LastUsedAt = time.Now()
 	return d.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "token"}},
-		DoUpdates: clause.AssignmentColumns([]string{"user_id", "device_id", "platform", "last_used_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"user_id", "device_id", "platform", "last_used_at", "updated_at"}),
 	}).Create(dt).Error
 }

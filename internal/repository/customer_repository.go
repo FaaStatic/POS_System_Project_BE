@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,8 +82,7 @@ func (c *customerRepository) GetAllCustomer(ctx context.Context, filter domain.F
 
 	query := c.db.WithContext(ctx).Model(&domain.Customers{})
 	if filter.Search != "" {
-		escaped := strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(filter.Search)
-		query = query.Where("name LIKE ? ESCAPE '\\'", "%"+escaped+"%")
+		query = query.Where("name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
 	}
 
 	var items []*domain.Customers
@@ -100,8 +98,8 @@ func (c *customerRepository) GetAllCustomer(ctx context.Context, filter domain.F
 	}, nil
 }
 
-func (c *customerRepository) UpdateCustomer(ctx context.Context, id uuid.UUID, customer *domain.Customers) error {
-	result := c.db.WithContext(ctx).Model(&domain.Customers{}).Where("id = ?", id).Updates(customer)
+func (c *customerRepository) UpdateCustomer(ctx context.Context, id uuid.UUID, fields map[string]any) error {
+	result := c.db.WithContext(ctx).Model(&domain.Customers{}).Where("id = ?", id).Updates(fields)
 	if result.Error != nil {
 		return fmt.Errorf("failed to update customer: %w", result.Error)
 	}

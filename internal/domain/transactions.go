@@ -58,6 +58,7 @@ var StoreLocation = time.FixedZone("WIB", 7*60*60)
 
 type FilterTransaction struct {
 	NoInvoices string
+	CustomerID *uuid.UUID
 	Cursor     *paginated.CursorMeta
 	DateFrom   *time.Time
 	DateUntil  *time.Time

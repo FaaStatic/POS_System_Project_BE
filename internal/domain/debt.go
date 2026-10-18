@@ -75,6 +75,7 @@ type DebtRepository interface {
 	DeleteDebt(ctx context.Context, id uuid.UUID) error
 	GetAllDebt(ctx context.Context, filter FilterDebt) (*DebtsPaginated, error)
 	GetDebtByID(ctx context.Context, id uuid.UUID) (*Debts, error)
+	GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*Debts, error)
 	PayDebt(ctx context.Context, debtID uuid.UUID, payment *DebtPayments) (*DebtPaymentResult, error)
 }
 

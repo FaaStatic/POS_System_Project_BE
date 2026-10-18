@@ -236,8 +236,18 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 		dateUntil = &next
 	}
 
+	var customerID *uuid.UUID
+	if dto.CustomerID != "" {
+		id, err := uuid.Parse(dto.CustomerID)
+		if err != nil {
+			return nil, domain.InvalidID("invalid customer id format")
+		}
+		customerID = &id
+	}
+
 	filter := &domain.FilterTransaction{
 		NoInvoices: dto.InvoiceNumber,
+		CustomerID: customerID,
 		Cursor:     cursor,
 		DateFrom:   dateFrom,
 		DateUntil:  dateUntil,

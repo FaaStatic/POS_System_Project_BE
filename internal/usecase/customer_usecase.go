@@ -123,12 +123,20 @@ func (c *customerUsecase) UpdateCustomerShop(ctx context.Context, request *reque
 		return domain.InvalidID("invalid customer id format")
 	}
 
-	customer := &domain.Customers{
-		Name:    request.CustomerName,
-		Phone:   request.PhoneNumber,
-		Address: request.Address,
+	fields := map[string]any{}
+	if request.CustomerName != nil {
+		fields["name"] = *request.CustomerName
 	}
-	if err := c.customerRepo.UpdateCustomer(ctx, id, customer); err != nil {
+	if request.PhoneNumber != nil {
+		fields["phone"] = *request.PhoneNumber
+	}
+	if request.Address != nil {
+		fields["address"] = *request.Address
+	}
+	if len(fields) == 0 {
+		return domain.Validation("no fields to update")
+	}
+	if err := c.customerRepo.UpdateCustomer(ctx, id, fields); err != nil {
 		c.log.Error("failed to update customer", zap.Error(err))
 		if errors.Is(err, domain.ErrNotFound) {
 			return err
