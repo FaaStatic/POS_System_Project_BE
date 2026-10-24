@@ -21,7 +21,7 @@ func openTestDB(t *testing.T) *gorm.DB {
 	if dsn == "" {
 		t.Skip("set TEST_DATABASE_DSN to run this test against a real, migrated Postgres")
 	}
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{SkipDefaultTransaction: true})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{SkipDefaultTransaction: true, TranslateError: true})
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestDeleteTransaction_ReversesDebtAndRestoresStock(t *testing.T) {
 		t.Fatalf("create hutang transaction failed: %v", err)
 	}
 
-	if err := repo.DeleteTransaction(context.Background(), trx.ID); err != nil {
+	if err := repo.DeleteTransaction(context.Background(), trx.ID, "test cancel"); err != nil {
 		t.Fatalf("delete transaction failed: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestDeleteTransaction_PartialReversalKeepsRemainderOwed(t *testing.T) {
 		t.Fatalf("create second: %v", err)
 	}
 
-	if err := repo.DeleteTransaction(context.Background(), first.ID); err != nil {
+	if err := repo.DeleteTransaction(context.Background(), first.ID, "test cancel"); err != nil {
 		t.Fatalf("delete first: %v", err)
 	}
 

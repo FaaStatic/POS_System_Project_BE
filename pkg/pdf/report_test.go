@@ -15,17 +15,13 @@ func TestMain(m *testing.M) {
 
 func TestGenerateMonthReport(t *testing.T) {
 	url, err := GenerateMonthReport(MonthReportData{
-		Cashier:          "admin",
-		Month:            6,
-		Year:             2026,
-		TotalTransaction: 42,
-		TotalRevenue:     12500000,
-		TotalDebt:        750000,
-		GrandTotal:       13250000,
+		Cashier: "admin",
+		Month:   6,
+		Year:    2026,
 		Daily: []MonthReportDailyRow{
-			{Date: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), TotalTransaction: 5, Revenue: 1500000, Debt: 0, Total: 1500000},
-			{Date: time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC), TotalTransaction: 3, Revenue: 800000, Debt: 250000, Total: 1050000},
-			{Date: time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC), TotalTransaction: 8, Revenue: 3200000, Debt: 500000, Total: 3700000},
+			{Date: time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), CountSale: 5, Revenue: 1500000, Cost: 1200000},
+			{Date: time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC), CountSale: 3, Revenue: 800000, Cost: 600000, CountDebt: 1, DebtSales: 250000, DebtCost: 200000, DebtManual: 100000},
+			{Date: time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC), DebtPaid: 150000},
 		},
 		ProductsSold: []MonthReportProductRow{
 			{ProductName: "Beras 5kg", Qty: 40, Total: 2600000},

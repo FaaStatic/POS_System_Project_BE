@@ -24,11 +24,8 @@ type FilterDebtRequest struct {
 type AddDebtRequest struct {
 	CustomerID     string `json:"customer_id" validate:"required,uuid"`
 	TotalTransaksi int64  `json:"total_transaksi" validate:"required,gt=0"`
-	JatuhTempo     string `json:"jatuh_tempo" validate:"required"`
-}
-
-type DeleteDebtRequest struct {
-	DebtId string `json:"debt_id" validate:"required,uuid"`
+	JatuhTempo     string `json:"jatuh_tempo,omitempty"`
+	UserID         string `json:"-" validate:"required,uuid"`
 }
 
 type PrintDebtReport struct {

@@ -14,14 +14,14 @@ import (
 
 type Debts struct {
 	ID            uuid.UUID       `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	CustomerID    uuid.UUID       `gorm:"type:uuid;not null" json:"customer_id"`
-	TotalDebt     int64           `gorm:"type:bigint;not null" json:"total_debt"`
-	RemainingDebt int64           `gorm:"type:bigint;not null" json:"remaining_debt"`
-	Status        enum.DebtStatus `gorm:"type:smallint;check:status IN (0,1);default:0" json:"status"`
+	CustomerID    uuid.UUID       `gorm:"type:uuid" json:"customer_id"`
+	TotalDebt     int64           `gorm:"type:bigint" json:"total_debt"`
+	RemainingDebt int64           `gorm:"type:bigint" json:"remaining_debt"`
+	Status        enum.DebtStatus `gorm:"type:smallint;default:0" json:"status"`
 	DueDate       time.Time       `gorm:"type:date" json:"due_date"`
 	CreatedAt     time.Time       `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
-	DeletedAt     gorm.DeletedAt  `gorm:"index" json:"-"`
+	DeletedAt     gorm.DeletedAt  `json:"-"`
 
 	Customer     Customers      `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`
 	Transactions []Transactions `gorm:"foreignKey:DebtID" json:"transactions,omitempty"`
@@ -30,14 +30,28 @@ type Debts struct {
 
 type DebtPayments struct {
 	ID                    uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	DebtID                uuid.UUID `gorm:"type:uuid;not null" json:"debt_id"`
-	UserID                uuid.UUID `gorm:"type:uuid;not null" json:"user_id"`
-	NominalBayar          int64     `gorm:"type:bigint;not null" json:"nominal_bayar"`
+	DebtID                uuid.UUID `gorm:"type:uuid" json:"debt_id"`
+	UserID                uuid.UUID `gorm:"type:uuid" json:"user_id"`
+	NominalBayar          int64     `gorm:"type:bigint" json:"nominal_bayar"`
 	TanggalBayar          time.Time `gorm:"autoCreateTime" json:"tanggal_bayar"`
 	IdempotencyKey        *string   `gorm:"type:varchar(100)" json:"idempotency_key,omitempty"`
-	PreviousRemainingDebt int64     `gorm:"type:bigint;not null;default:0" json:"previous_remaining_debt"`
+	PreviousRemainingDebt int64     `gorm:"type:bigint;default:0" json:"previous_remaining_debt"`
 
 	User *Users `gorm:"foreignKey:UserID" json:"user,omitempty"`
+}
+
+// DebtAdjustments mencatat hutang manual (POST /api/debts) yang tidak punya
+// transaksi: siapa input, berapa, kapan.
+type DebtAdjustments struct {
+	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	DebtID    uuid.UUID `gorm:"type:uuid" json:"debt_id"`
+	UserID    uuid.UUID `gorm:"type:uuid" json:"user_id"`
+	Amount    int64     `gorm:"type:bigint" json:"amount"`
+	CreatedAt time.Time `gorm:"autoCreateTime" json:"created_at"`
+}
+
+func (d *DebtAdjustments) TableName() string {
+	return "debt_adjustments"
 }
 
 func (d *Debts) TableName() string {
@@ -71,8 +85,7 @@ type DebtPaymentResult struct {
 }
 
 type DebtRepository interface {
-	AddDebt(ctx context.Context, debt *Debts) error
-	DeleteDebt(ctx context.Context, id uuid.UUID) error
+	AddDebt(ctx context.Context, debt *Debts, userID uuid.UUID) error
 	GetAllDebt(ctx context.Context, filter FilterDebt) (*DebtsPaginated, error)
 	GetDebtByID(ctx context.Context, id uuid.UUID) (*Debts, error)
 	GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*Debts, error)
@@ -81,7 +94,6 @@ type DebtRepository interface {
 
 type DebtUseCase interface {
 	AddingDebtCustomer(ctx context.Context, request *requestdto.AddDebtRequest) error
-	DeleteDebtCustomer(ctx context.Context, request *requestdto.DeleteDebtRequest) error
 	GetAllDebtCustomerList(ctx context.Context, request *requestdto.FilterDebtRequest) (*responsedto.DebtListResponseDto, error)
 	GetDebtCustomer(ctx context.Context, request *requestdto.GetDebtRequest) (*responsedto.DebtResponseDto, error)
 	PrintReportDebtCustomer(ctx context.Context, request *requestdto.PrintDebtReport) (*responsedto.PrintDebtCustomerResponse, error)

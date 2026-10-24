@@ -10,6 +10,11 @@ server:
   # nginx) agar c.IP() membaca X-Forwarded-For; dari sumber lain header itu
   # diabaikan, jadi client tidak bisa memalsukan IP-nya ke rate limiter.
   trusted_proxies: []
+  # Origin CMS web (mis. https://cms.tokoku.id). Kalau diisi, CORS hanya menerima
+  # origin ini dengan credentials sehingga cookie refresh token CMS terkirim.
+  # Kosong = semua origin tanpa credentials (cocok untuk kasir mobile saja).
+  # Cookie memakai SameSite=Strict, jadi CMS dan API harus satu site.
+  cms_origins: []
 database:
   user:
   pass:

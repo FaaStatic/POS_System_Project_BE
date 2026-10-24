@@ -120,10 +120,15 @@ func TestValidateToken_RejectsHS256AlgConfusionWithNoneCheck(t *testing.T) {
 		t.Fatalf("generate: %v", err)
 	}
 
-	tampered := pair.AccessToken[:len(pair.AccessToken)-1] + "x"
-	if strings.HasSuffix(pair.AccessToken, "x") {
-		tampered = pair.AccessToken[:len(pair.AccessToken)-1] + "y"
+	// Ubah karakter pertama signature, bukan terakhir: karakter base64 terakhir
+	// dari signature 32 byte membawa bit sisa yang diabaikan decoder, jadi
+	// menggantinya kadang menghasilkan signature yang sama (flaky ~1/16).
+	sigStart := strings.LastIndex(pair.AccessToken, ".") + 1
+	replacement := "A"
+	if pair.AccessToken[sigStart] == 'A' {
+		replacement = "B"
 	}
+	tampered := pair.AccessToken[:sigStart] + replacement + pair.AccessToken[sigStart+1:]
 
 	if _, err := svc.ValidateToken(tampered); err == nil {
 		t.Fatal("expected an error for a tampered signature")

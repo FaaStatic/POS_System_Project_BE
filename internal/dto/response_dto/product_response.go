@@ -7,23 +7,25 @@ import (
 )
 
 type ProductDtoResponse struct {
-	ID               uuid.UUID `json:"id"`
-	SKU              string    `json:"sku"`
-	ProductName      string    `json:"product_name"`
-	Unit             int       `json:"unit"`
-	PurchasePrice    int64     `json:"purchase_price"`
-	SellingPrice     int64     `json:"selling_price"`
-	SellingPriceDebt int64     `json:"selling_price_debt"`
-	Stock            float64   `json:"stock"`
-	Category         string    `json:"category"`
-	Image            string    `json:"image"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               uuid.UUID  `json:"id"`
+	SKU              string     `json:"sku"`
+	ProductName      string     `json:"product_name"`
+	Unit             int        `json:"unit"`
+	ProductType      int        `json:"product_type"`
+	PurchasePrice    int64      `json:"purchase_price"`
+	SellingPrice     int64      `json:"selling_price"`
+	SellingPriceDebt int64      `json:"selling_price_debt"`
+	Stock            float64    `json:"stock"`
+	CategoryID       *uuid.UUID `json:"category_id"`
+	Category         string     `json:"category"`
+	Image            string     `json:"image"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 type ProductBulkImportResponse struct {
 	TotalInserted   int                  `json:"total_inserted"`
-	TotalSkipped    int                  `json:"total_skipped"`
-	SkippedSKUs     []string             `json:"skipped_skus"`
+	TotalUpdated    int                  `json:"total_updated"`
+	UpdatedSKUs     []string             `json:"updated_skus"`
 	DuplicateInFile []string             `json:"duplicate_in_file"`
 	RowErrors       []BulkImportRowError `json:"row_errors"`
 }

@@ -16,6 +16,8 @@ var ErrValidation = errors.New("validation failed")
 
 var ErrConflict = errors.New("conflict")
 
+var ErrForbidden = errors.New("forbidden")
+
 func IsTransient(err error) bool {
 	return errors.Is(err, ErrInternal)
 }
@@ -37,3 +39,5 @@ func Duplicate(msg string) error { return &taggedError{msg: msg, target: ErrDupl
 func Validation(msg string) error { return &taggedError{msg: msg, target: ErrValidation} }
 
 func Conflict(msg string) error { return &taggedError{msg: msg, target: ErrConflict} }
+
+func Forbidden(msg string) error { return &taggedError{msg: msg, target: ErrForbidden} }

@@ -37,7 +37,7 @@ func (h *ProductHandler) Add(c fiber.Ctx) error {
 	if err := bindBody(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	if err := h.usecase.AddProductShopWithLock(c.Context(), &req); err != nil {
@@ -68,7 +68,7 @@ func (h *ProductHandler) AddBulk(c fiber.Ctx) error {
 	if err != nil {
 		return writeError(c, fiber.StatusBadRequest, err)
 	}
-	if result.TotalInserted == 0 {
+	if result.TotalInserted == 0 && result.TotalUpdated == 0 {
 		return response.Success(c, fiber.StatusOK, "no product imported", result)
 	}
 	return response.Success(c, fiber.StatusCreated, "bulk product imported", result)
@@ -88,7 +88,7 @@ func (h *ProductHandler) AddBulk(c fiber.Ctx) error {
 //	@Router			/api/products/{id} [get]
 func (h *ProductHandler) Get(c fiber.Ctx) error {
 	req := requestdto.GetProduct{ID: c.Params("id")}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	product, err := h.usecase.GetProductShop(c.Context(), &req)
@@ -105,7 +105,7 @@ func (h *ProductHandler) Get(c fiber.Ctx) error {
 //	@Tags			Products
 //	@Produce		json
 //	@Security		BearerAuth
-//	@Param			category	query		string	false	"Filter kategori"
+//	@Param			category_id	query		string	false	"Filter category ID"
 //	@Param			search		query		string	false	"Search by product name/SKU"
 //	@Param			limit		query		int		false	"Number of items per page"
 //	@Param			last_id		query		string	false	"Last ID for cursor pagination"
@@ -121,14 +121,14 @@ func (h *ProductHandler) List(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
 	}
 	req.UserId = middleware.GetUserID(c)
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	products, err := h.usecase.GetAllProductShop(c.Context(), &req)
 	if err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
-	return response.Paginated(c, fiber.StatusOK, "products fetched", products)
+	return response.Success(c, fiber.StatusOK, "products fetched", products)
 }
 
 // Update godoc
@@ -144,17 +144,22 @@ func (h *ProductHandler) List(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/products/{id} [put]
+//	@Router			/api/products/{id} [patch]
 func (h *ProductHandler) Update(c fiber.Ctx) error {
 	var req requestdto.UpdateProduct
 	if err := bindBody(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 	req.ID = c.Params("id")
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
-	if err := h.usecase.UpdateProductShopWithLock(c.Context(), &req, 0); err != nil {
+	superadmin := isSuperadmin(c)
+	if !superadmin && (req.PurchasePrice != nil || req.ProductType != nil) {
+		return response.Error(c, fiber.StatusForbidden, "only superadmin can change purchase_price or product_type", nil)
+	}
+	req.AllowNewCategory = superadmin
+	if err := h.usecase.UpdateProductShopWithLock(c.Context(), &req); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	return response.Success(c, fiber.StatusOK, "product updated", nil)
@@ -178,10 +183,10 @@ func (h *ProductHandler) UpdateStock(c fiber.Ctx) error {
 	if err := bindBody(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
-	if err := h.usecase.UpdateStockWithLock(c.Context(), &req, req.Stock); err != nil {
+	if err := h.usecase.UpdateStockWithLock(c.Context(), &req); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	h.log.Info("audit: stock adjusted",
@@ -207,11 +212,101 @@ func (h *ProductHandler) UpdateStock(c fiber.Ctx) error {
 //	@Router			/api/products/{id} [delete]
 func (h *ProductHandler) Delete(c fiber.Ctx) error {
 	req := requestdto.DeleteProduct{ID: c.Params("id")}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	if err := h.usecase.DeleteProductShop(c.Context(), &req); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	return response.Success(c, fiber.StatusOK, "product deleted", nil)
+}
+
+// ListCategories godoc
+//
+//	@Summary		List categories
+//	@Description	Fetches all product categories, sorted by name.
+//	@Tags			Products
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		500	{object}	response.APIResponse
+//	@Router			/api/categories [get]
+func (h *ProductHandler) ListCategories(c fiber.Ctx) error {
+	categories, err := h.usecase.ListCategories(c.Context())
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "categories fetched", categories)
+}
+
+// AddCategory godoc
+//
+//	@Summary		Add category
+//	@Description	Adds a product category. Names are unique ignoring case and surrounding spaces. Superadmin only.
+//	@Tags			Products
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			request	body		requestdto.CategoryRequest	true	"Category name"
+//	@Success		201		{object}	response.APIResponse
+//	@Failure		409		{object}	response.APIResponse
+//	@Router			/api/categories [post]
+func (h *ProductHandler) AddCategory(c fiber.Ctx) error {
+	var req requestdto.CategoryRequest
+	if err := bindBody(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	category, err := h.usecase.AddCategory(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusCreated, "category added", category)
+}
+
+// RenameCategory godoc
+//
+//	@Summary		Rename category
+//	@Description	Renames a product category. Superadmin only.
+//	@Tags			Products
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id		path		string						true	"Category ID"
+//	@Param			request	body		requestdto.CategoryRequest	true	"New name"
+//	@Success		200		{object}	response.APIResponse
+//	@Failure		409		{object}	response.APIResponse
+//	@Router			/api/categories/{id} [patch]
+func (h *ProductHandler) RenameCategory(c fiber.Ctx) error {
+	var req requestdto.CategoryRequest
+	if err := bindBody(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	if err := h.usecase.RenameCategory(c.Context(), c.Params("id"), &req); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "category renamed", nil)
+}
+
+// DeleteCategory godoc
+//
+//	@Summary		Delete category
+//	@Description	Deletes a category that no active product uses (see product_count in the list). Superadmin only.
+//	@Tags			Products
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Category ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		409	{object}	response.APIResponse
+//	@Router			/api/categories/{id} [delete]
+func (h *ProductHandler) DeleteCategory(c fiber.Ctx) error {
+	if err := h.usecase.DeleteCategory(c.Context(), c.Params("id")); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "category deleted", nil)
 }

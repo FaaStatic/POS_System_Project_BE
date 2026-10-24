@@ -15,3 +15,24 @@ type UserRegisterResponse struct {
 	Message string `json:"message"`
 	Status  int    `json:"status"`
 }
+
+type StaffResponse struct {
+	ID        uuid.UUID `json:"id"`
+	Username  string    `json:"username"`
+	Role      string    `json:"role"`
+	Active    bool      `json:"active"`
+	CreatedAt string    `json:"created_at"`
+}
+
+type ListStaffResponse struct {
+	AfterId   string          `json:"after_id"`
+	AfterTime string          `json:"after_time"`
+	HasNext   bool            `json:"has_next"`
+	Staff     []StaffResponse `json:"staff"`
+}
+
+// PurgeResponse.Mode: "deleted" (baris hilang) atau "anonymized" (baris tetap
+// ada karena dirujuk riwayat, data pribadinya dikosongkan).
+type PurgeResponse struct {
+	Mode string `json:"mode"`
+}

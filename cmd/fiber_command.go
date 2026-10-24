@@ -59,6 +59,7 @@ var serverRun = &cobra.Command{
 		paymentRepo := repository.NewPaymentRepository(db)
 		sessionRepo := repository.NewSessionRepository(redisClient)
 		fcmRepo := repository.NewDeviceTokenRepository(db)
+		dashboardRepo := repository.NewDashboardRepository(db)
 
 		jwtService := jwt.NewJWTService(envConf.JWT.Secret,
 			time.Duration(envConf.JWT.AccessTokenTTL)*time.Second,
@@ -74,7 +75,7 @@ var serverRun = &cobra.Command{
 		trxUC := usecase.NewTransactionUsecase(trxRepo, productRepo, userRepo, envConf.App.Name, loggerconfig.Logger)
 		customerUC := usecase.NewCustomerUsecase(customerRepo, loggerconfig.Logger)
 		debtUC := usecase.NewDebtUsecase(debtRepo, loggerconfig.Logger)
-		userUC := usecase.NewUserUsecase(userRepo, sessionRepo, loggerconfig.Logger, jwtService)
+		userUC := usecase.NewUserUsecase(userRepo, sessionRepo, fcmRepo, loggerconfig.Logger, jwtService)
 		fcmUC := usecase.NewFcmUsecase(sender, fcmRepo, loggerconfig.Logger)
 		paymentUC := usecase.NewPaymentUsecase(paymentRepo, midtransGateway, productRepo, trxUC, trxRepo, fcmUC, loggerconfig.Logger)
 
@@ -102,16 +103,20 @@ var serverRun = &cobra.Command{
 		}
 
 		handlers := route.Handlers{
-			User:        handler.NewUserHandler(userUC, fcmUC, loggerconfig.Logger),
+			User: handler.NewUserHandler(userUC, fcmUC, loggerconfig.Logger, handler.WebCookieConfig{
+				Secure:     env != "development",
+				RefreshTTL: jwtService.RefreshTokenTTL(),
+			}),
 			Product:     handler.NewProductHandler(productUC, loggerconfig.Logger),
 			Transaction: handler.NewTransactionHandler(trxUC, loggerconfig.Logger),
 			Customer:    handler.NewCustomerHandler(customerUC, loggerconfig.Logger),
 			Debt:        handler.NewDebtHandler(debtUC, loggerconfig.Logger),
 			Payment:     handler.NewPaymentHandler(paymentUC, loggerconfig.Logger),
 			Fcm:         handler.NewFcmHandler(fcmUC, loggerconfig.Logger),
+			Dashboard:   handler.NewDashboardHandler(usecase.NewDashboardUsecase(dashboardRepo, loggerconfig.Logger)),
 		}
 		jwtMw := middleware.NewJwtMiddleware(jwtService, sessionRepo)
-		storage := cache.NewLimiterStorage(&envConf.Redis)
+		storage := cache.NewLimiterStorage(redisClient)
 		app := fiberconfig.InitFiber(env, envConf, loggerconfig.Logger, storage, route.New(handlers, jwtMw, storage, loggerconfig.Logger, envConf.Midtrans.Configured()))
 
 		loggerconfig.Logger.Info("server starting",

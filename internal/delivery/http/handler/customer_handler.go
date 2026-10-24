@@ -36,7 +36,7 @@ func (h *CustomerHandler) Add(c fiber.Ctx) error {
 	if err := bindBody(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	if err := h.usecase.AddCustomerShop(c.Context(), &req); err != nil {
@@ -65,7 +65,7 @@ func (h *CustomerHandler) Update(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 	req.CustomerId = c.Params("id")
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	if err := h.usecase.UpdateCustomerShop(c.Context(), &req); err != nil {
@@ -89,7 +89,7 @@ func (h *CustomerHandler) Update(c fiber.Ctx) error {
 //	@Router			/api/customers/{id} [delete]
 func (h *CustomerHandler) Delete(c fiber.Ctx) error {
 	req := requestdto.DeleteCustomer{CustomerId: c.Params("id")}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	if err := h.usecase.DeleteCustomerShop(c.Context(), &req); err != nil {
@@ -111,8 +111,8 @@ func (h *CustomerHandler) Delete(c fiber.Ctx) error {
 //	@Failure		404	{object}	response.APIResponse
 //	@Router			/api/customers/{id} [get]
 func (h *CustomerHandler) Get(c fiber.Ctx) error {
-	req := requestdto.GetCustomer{CustomerId: c.Params("id")}
-	if err := validate.Validate(&req); err != nil {
+	req := requestdto.GetCustomer{CustomerId: c.Params("id"), IncludeInactive: isSuperadmin(c)}
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	customer, err := h.usecase.GetCustomerShop(c.Context(), &req)
@@ -143,12 +143,52 @@ func (h *CustomerHandler) List(c fiber.Ctx) error {
 	if err := bindQuery(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	if req.Status == "inactive" && !isSuperadmin(c) {
+		return response.Error(c, fiber.StatusForbidden, "only superadmin can list inactive customers", nil)
 	}
 	customers, err := h.usecase.GetListCustomerShop(c.Context(), &req)
 	if err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	return response.Success(c, fiber.StatusOK, "customers fetched", customers)
+}
+
+// Restore godoc
+//
+//	@Summary		Restore customer
+//	@Description	Reactivates a deactivated customer. Superadmin only.
+//	@Tags			Customers
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Customer ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		404	{object}	response.APIResponse
+//	@Router			/api/customers/{id}/restore [post]
+func (h *CustomerHandler) Restore(c fiber.Ctx) error {
+	if err := h.usecase.RestoreCustomerShop(c.Context(), c.Params("id")); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "customer restored", nil)
+}
+
+// Purge godoc
+//
+//	@Summary		Delete customer permanently
+//	@Description	Permanently removes a deactivated customer with no unpaid debt. Customers referenced by sales, debts or payments are anonymized instead (mode=anonymized). Superadmin only.
+//	@Tags			Customers
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Customer ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		409	{object}	response.APIResponse
+//	@Router			/api/customers/{id}/permanent [delete]
+func (h *CustomerHandler) Purge(c fiber.Ctx) error {
+	result, err := h.usecase.PurgeCustomerShop(c.Context(), c.Params("id"))
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "customer deleted", result)
 }

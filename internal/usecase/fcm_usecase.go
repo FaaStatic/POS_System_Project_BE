@@ -103,3 +103,23 @@ func (f *fcmUsecase) RegisterDevice(ctx context.Context, userID string, token st
 
 	return nil
 }
+
+func (f *fcmUsecase) ListDevices(ctx context.Context, platform string) ([]domain.DeviceListItem, error) {
+	devices, err := f.fcmRepo.ListDevices(ctx, platform)
+	if err != nil {
+		f.log.Error("failed to list devices", zap.Error(err))
+		return nil, fmt.Errorf("failed to list devices: %w", domain.ErrInternal)
+	}
+	return devices, nil
+}
+
+func (f *fcmUsecase) RevokeDevice(ctx context.Context, id string) error {
+	deviceID, err := uuid.Parse(id)
+	if err != nil {
+		return domain.InvalidID("invalid device id format")
+	}
+	if err := f.fcmRepo.DeleteDeviceByID(ctx, deviceID); err != nil {
+		return passOrInternal(f.log, err, "failed to delete device", domain.ErrNotFound)
+	}
+	return nil
+}

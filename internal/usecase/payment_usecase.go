@@ -318,11 +318,54 @@ func (u *paymentUsecase) finalizeSettlement(ctx context.Context, orderID string)
 	return nil
 }
 
-func (u *paymentUsecase) ensureTransaction(ctx context.Context, payment *domain.Payment) (uuid.UUID, error) {
-	if existing, err := u.trxRepo.CheckTransactionByNoInvoice(ctx, payment.OrderID); err != nil {
+// existingPaymentTransaction mengakui transaksi ber-invoice = order_id hanya
+// kalau kasir dan itemnya sama dengan pembayaran. Tanpa cek ini, staff yang tahu
+// order_id bisa lebih dulu membuat transaksi manual dengan invoice itu, lalu
+// settlement menautkan pembayaran ke transaksi palsu.
+func (u *paymentUsecase) existingPaymentTransaction(ctx context.Context, payment *domain.Payment) (uuid.UUID, error) {
+	existing, err := u.trxRepo.CheckTransactionByNoInvoice(ctx, payment.OrderID)
+	if err != nil {
 		return uuid.Nil, fmt.Errorf("failed to check transaction: %w", domain.ErrInternal)
-	} else if existing != nil {
-		return existing.ID, nil
+	}
+	if existing == nil {
+		return uuid.Nil, nil
+	}
+	trx, err := u.trxRepo.GetTransactionByID(ctx, existing.ID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("failed to load transaction: %w", domain.ErrInternal)
+	}
+	if trx.UserID != payment.UserID || !sameItems(trx.TransactionDetail, payment.Items) {
+		u.log.Error("PAYMENT_INVOICE_CONFLICT: a transaction with this order id exists but does not match the payment",
+			zap.String("order_id", payment.OrderID),
+			zap.String("transaction_id", trx.ID.String()),
+		)
+		return uuid.Nil, domain.Conflict(fmt.Sprintf("transaction %s does not match payment %s", trx.NoInvoice, payment.OrderID))
+	}
+	return trx.ID, nil
+}
+
+func sameItems(details []domain.TransactionsDetail, items []domain.PaymentItem) bool {
+	if len(details) != len(items) {
+		return false
+	}
+	qty := make(map[uuid.UUID]float64, len(items))
+	for _, it := range items {
+		qty[it.ProductID] += it.Qty
+	}
+	for _, d := range details {
+		qty[d.ProductID] -= d.Qty
+	}
+	for _, q := range qty {
+		if math.Abs(q) > 1e-9 {
+			return false
+		}
+	}
+	return true
+}
+
+func (u *paymentUsecase) ensureTransaction(ctx context.Context, payment *domain.Payment) (uuid.UUID, error) {
+	if existingID, err := u.existingPaymentTransaction(ctx, payment); err != nil || existingID != uuid.Nil {
+		return existingID, err
 	}
 
 	details := make([]requestdto.AddTransactionDetailRequest, 0, len(payment.Items))
@@ -364,8 +407,8 @@ func (u *paymentUsecase) ensureTransaction(ctx context.Context, payment *domain.
 	resp, err := addTrx(ctx, addReq)
 	if err != nil {
 		if errors.Is(err, domain.ErrDuplicate) {
-			if existing, lookupErr := u.trxRepo.CheckTransactionByNoInvoice(ctx, payment.OrderID); lookupErr == nil && existing != nil {
-				return existing.ID, nil
+			if existingID, lookupErr := u.existingPaymentTransaction(ctx, payment); lookupErr != nil || existingID != uuid.Nil {
+				return existingID, lookupErr
 			}
 		}
 		return uuid.Nil, fmt.Errorf("failed to create transaction from payment: %w", err)
@@ -615,4 +658,37 @@ func parseMidtransTime(s string) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+func (u *paymentUsecase) ListPayments(ctx context.Context, request *requestdto.ListPaymentsRequest) (*domain.PaymentsPage, error) {
+	cursor, err := parseCursor(request.AfterID, request.AfterTime)
+	if err != nil {
+		return nil, err
+	}
+	dateFrom, err := parseStoreDay(request.DateStart, "date_start")
+	if err != nil {
+		return nil, err
+	}
+	dateUntil, err := parseStoreDay(request.DateEnd, "date_end")
+	if err != nil {
+		return nil, err
+	}
+	if dateUntil != nil {
+		next := dateUntil.AddDate(0, 0, 1)
+		dateUntil = &next
+	}
+	page, err := u.paymentRepo.ListPayments(ctx, domain.FilterPayment{
+		Status:    request.Status,
+		Method:    request.Method,
+		DateFrom:  dateFrom,
+		DateUntil: dateUntil,
+		Cursor:    cursor,
+		Limit:     request.Limit,
+		Order:     request.Order,
+	})
+	if err != nil {
+		u.log.Error("failed to list payments", zap.Error(err))
+		return nil, fmt.Errorf("failed to list payments: %w", domain.ErrInternal)
+	}
+	return page, nil
 }

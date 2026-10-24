@@ -33,7 +33,7 @@ func TestDeleteTransaction_RefusedWhenDebtHasInstalments(t *testing.T) {
 		t.Fatalf("record debt payment: %v", err)
 	}
 
-	err := repo.DeleteTransaction(context.Background(), trx.ID)
+	err := repo.DeleteTransaction(context.Background(), trx.ID, "test cancel")
 	if err == nil {
 		t.Fatal("expected the delete to be refused once the debt has instalments")
 	}
@@ -88,7 +88,7 @@ func TestDeleteTransaction_RefusedWhenBackedBySettledPayment(t *testing.T) {
 	}
 	t.Cleanup(func() { db.Unscoped().Delete(&domain.Payment{}, "id = ?", payment.ID) })
 
-	err := repo.DeleteTransaction(context.Background(), trx.ID)
+	err := repo.DeleteTransaction(context.Background(), trx.ID, "test cancel")
 	if err == nil {
 		t.Fatal("expected the delete to be refused for a settled online payment")
 	}
@@ -115,7 +115,7 @@ func TestDeleteTransaction_AllowedWhenNothingSettled(t *testing.T) {
 		t.Fatalf("create cash transaction: %v", err)
 	}
 
-	if err := repo.DeleteTransaction(context.Background(), trx.ID); err != nil {
+	if err := repo.DeleteTransaction(context.Background(), trx.ID, "test cancel"); err != nil {
 		t.Fatalf("a plain cash sale with no instalments and no payment must stay deletable: %v", err)
 	}
 
@@ -132,7 +132,7 @@ func TestDeleteTransaction_UnknownIDIsNotFound(t *testing.T) {
 	db := openTestDB(t)
 	repo := repository.NewTransactionRepository(db)
 
-	err := repo.DeleteTransaction(context.Background(), uuid.New())
+	err := repo.DeleteTransaction(context.Background(), uuid.New(), "test cancel")
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("error = %v; want it to match domain.ErrNotFound", err)
 	}

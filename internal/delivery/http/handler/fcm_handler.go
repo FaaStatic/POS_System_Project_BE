@@ -27,7 +27,7 @@ func (h *FcmHandler) Register(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	userId, ok := c.Locals("user_id").(string)
@@ -49,7 +49,7 @@ func (h *FcmHandler) Logout(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 
@@ -59,4 +59,44 @@ func (h *FcmHandler) Logout(c fiber.Ctx) error {
 	}
 
 	return response.Success(c, fiber.StatusOK, "logout successful", nil)
+}
+
+// ListDevices godoc
+//
+//	@Summary		List devices
+//	@Description	Lists registered Android/iOS devices with the user currently signed in on each. Superadmin only.
+//	@Tags			Devices
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			platform	query		string	false	"android or ios"
+//	@Success		200			{object}	response.APIResponse
+//	@Router			/api/fcm/devices [get]
+func (h *FcmHandler) ListDevices(c fiber.Ctx) error {
+	platform := c.Query("platform")
+	if platform != "" && platform != "android" && platform != "ios" {
+		return response.Error(c, fiber.StatusBadRequest, "platform must be android or ios", nil)
+	}
+	devices, err := h.fcmUsecase.ListDevices(c.Context(), platform)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "devices fetched", devices)
+}
+
+// RevokeDevice godoc
+//
+//	@Summary		Revoke device
+//	@Description	Deletes a device token so the device stops receiving push notifications until it registers again. Superadmin only.
+//	@Tags			Devices
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Device row ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		404	{object}	response.APIResponse
+//	@Router			/api/fcm/devices/{id} [delete]
+func (h *FcmHandler) RevokeDevice(c fiber.Ctx) error {
+	if err := h.fcmUsecase.RevokeDevice(c.Context(), c.Params("id")); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "device revoked", nil)
 }

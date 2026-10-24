@@ -13,12 +13,12 @@ import (
 
 type Customers struct {
 	ID        uuid.UUID      `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	Name      string         `gorm:"type:varchar(150);not null" json:"name"`
+	Name      string         `gorm:"type:varchar(150)" json:"name"`
 	Phone     string         `gorm:"type:varchar(15)" json:"phone"`
 	Address   string         `gorm:"type:text" json:"address"`
 	CreatedAt time.Time      `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt time.Time      `gorm:"autoUpdateTime" json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	DeletedAt gorm.DeletedAt `json:"-"`
 }
 
 func (c *Customers) TableName() string {
@@ -26,10 +26,11 @@ func (c *Customers) TableName() string {
 }
 
 type FilterCustomer struct {
-	Search string
-	Cursor *paginated.CursorMeta
-	Limit  int
-	Order  string
+	Search   string
+	Inactive bool
+	Cursor   *paginated.CursorMeta
+	Limit    int
+	Order    string
 }
 
 type CustomersPaginated struct {
@@ -39,11 +40,16 @@ type CustomersPaginated struct {
 }
 
 type CustomerRepository interface {
-	GetCustomer(ctx context.Context, id uuid.UUID) (*Customers, error)
+	// GetCustomer: includeInactive=true ikut membaca customer yang dinonaktifkan.
+	GetCustomer(ctx context.Context, id uuid.UUID, includeInactive bool) (*Customers, error)
 	UpdateCustomer(ctx context.Context, id uuid.UUID, fields map[string]any) error
 	AddCustomer(ctx context.Context, customer *Customers) error
 	DeleteCustomer(ctx context.Context, id uuid.UUID) error
 	GetAllCustomer(ctx context.Context, filter FilterCustomer) (*CustomersPaginated, error)
+	RestoreCustomer(ctx context.Context, id uuid.UUID) error
+	// PurgeCustomer: sama seperti PurgeUser, customer yang dirujuk riwayat
+	// dianonimkan dengan anonFields, bukan dihapus.
+	PurgeCustomer(ctx context.Context, id uuid.UUID, anonFields map[string]any) (anonymized bool, err error)
 }
 
 type CustomerUsecase interface {
@@ -52,4 +58,6 @@ type CustomerUsecase interface {
 	GetListCustomerShop(ctx context.Context, request *requestdto.GetAllCustomer) (*responsedto.ListCustomerDtoResponse, error)
 	GetCustomerShop(ctx context.Context, request *requestdto.GetCustomer) (*responsedto.CustomerDtoResponse, error)
 	DeleteCustomerShop(ctx context.Context, request *requestdto.DeleteCustomer) error
+	RestoreCustomerShop(ctx context.Context, id string) error
+	PurgeCustomerShop(ctx context.Context, id string) (*responsedto.PurgeResponse, error)
 }

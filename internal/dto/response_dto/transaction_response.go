@@ -7,7 +7,24 @@ type AddTransactionResponse struct {
 	NoInvoice        string               `json:"no_invoice"`
 	TotalTransaction int64                `json:"total_transaction"`
 	PaymentType      string               `json:"payment_type"`
+	StockConflict    bool                 `json:"stock_conflict"`
 	DebtInfo         *DebtTransactionInfo `json:"debt_info,omitempty"`
+}
+
+type SyncTransactionsResponse struct {
+	Results []SyncTransactionResult `json:"results"`
+}
+
+// Status: created | duplicate | failed. Retryable=false berarti item tidak akan
+// berhasil walau dikirim ulang (mis. produk sudah dihapus).
+type SyncTransactionResult struct {
+	ClientRef     string     `json:"client_ref"`
+	Status        string     `json:"status"`
+	TransactionID *uuid.UUID `json:"transaction_id,omitempty"`
+	NoInvoice     string     `json:"no_invoice,omitempty"`
+	StockConflict bool       `json:"stock_conflict"`
+	Retryable     bool       `json:"retryable"`
+	Error         string     `json:"error,omitempty"`
 }
 
 type DebtTransactionInfo struct {
@@ -33,6 +50,8 @@ type TransactionResponse struct {
 	PaymentType        int                           `json:"payment_type"`
 	TotalTransaction   int64                         `json:"total_transaction"`
 	TotalProfit        int64                         `json:"total_profit"`
+	StockConflict      bool                          `json:"stock_conflict"`
+	ConflictReviewed   bool                          `json:"conflict_reviewed"`
 	CreatedAt          string                        `json:"created_at"`
 	TransactionDetails []*ProductTransactionResponse `json:"transaction_details"`
 }

@@ -7,6 +7,7 @@ type CustomerDtoResponse struct {
 	Nama   string            `json:"nama"`
 	NoHP   string            `json:"no_hp"`
 	Alamat string            `json:"alamat"`
+	Active bool              `json:"active"`
 	Debts  []DebtResponseDto `json:"debts,omitempty"`
 }
 

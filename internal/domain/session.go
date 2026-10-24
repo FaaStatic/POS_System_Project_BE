@@ -16,6 +16,9 @@ type Session struct {
 type SessionRepository interface {
 	CreateSession(ctx context.Context, session *Session, key string, ttl time.Duration) error
 	DeleteSession(ctx context.Context, key string) error
-	PopSessionByRefreshToken(ctx context.Context, key string) (*Session, error)
+	PopSession(ctx context.Context, key string) (*Session, error)
 	Exists(ctx context.Context, key string) (bool, error)
+	// RevokeUserSessions mencabut semua sesi user (akun dinonaktifkan atau
+	// password diganti).
+	RevokeUserSessions(ctx context.Context, userID string) error
 }

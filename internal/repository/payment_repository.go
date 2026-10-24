@@ -7,6 +7,7 @@ import (
 	"shop_project_be/internal/domain"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -108,4 +109,30 @@ func (p *paymentRepository) UpdateWithLock(ctx context.Context, orderID string, 
 		}
 		return nil
 	})
+}
+
+func (p *paymentRepository) ListPayments(ctx context.Context, filter domain.FilterPayment) (*domain.PaymentsPage, error) {
+	limit, order := pageParams(filter.Limit, filter.Order)
+
+	query := p.db.WithContext(ctx).Model(&domain.Payment{})
+	if filter.Status != "" {
+		query = query.Where("status = ?", filter.Status)
+	}
+	if filter.Method != "" {
+		query = query.Where("method = ?", filter.Method)
+	}
+	if filter.DateFrom != nil {
+		query = query.Where("created_at >= ?", *filter.DateFrom)
+	}
+	if filter.DateUntil != nil {
+		query = query.Where("created_at < ?", *filter.DateUntil)
+	}
+
+	var items []*domain.Payment
+	if err := keysetPage(query, "", limit, order, filter.Cursor).Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("failed to list payments: %w", err)
+	}
+	items, hasNext, next := trimPage(items, limit, func(x *domain.Payment) (time.Time, uuid.UUID) { return x.CreatedAt, x.ID })
+	nextID, nextTime := next.Encode()
+	return &domain.PaymentsPage{AfterId: nextID, AfterTime: nextTime, HasNext: hasNext, Payments: items}, nil
 }

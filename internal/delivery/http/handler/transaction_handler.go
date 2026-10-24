@@ -41,7 +41,7 @@ func (h *TransactionHandler) Add(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 	req.UserId = middleware.GetUserID(c)
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	result, err := h.trxUsecase.AddTransaction(c.Context(), &req)
@@ -99,7 +99,7 @@ func (h *TransactionHandler) listTransactions(c fiber.Ctx, customerID string) er
 	}
 	req.UserId = middleware.GetUserID(c)
 	req.CustomerID = customerID
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	result, err := h.trxUsecase.GetAllTransaction(c.Context(), &req)
@@ -123,7 +123,7 @@ func (h *TransactionHandler) listTransactions(c fiber.Ctx, customerID string) er
 //	@Router			/api/transactions/{id} [get]
 func (h *TransactionHandler) Get(c fiber.Ctx) error {
 	req := requestdto.GetTransactionRequest{ID: c.Params("id")}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	result, err := h.trxUsecase.GetTransaction(c.Context(), &req)
@@ -135,20 +135,26 @@ func (h *TransactionHandler) Get(c fiber.Ctx) error {
 
 // Delete godoc
 //
-//	@Summary		Delete transaction
-//	@Description	Deletes a transaction by ID.
+//	@Summary		Cancel transaction
+//	@Description	Cancels (soft-deletes) a transaction by ID; the reason is stored with it.
 //	@Tags			Transactions
 //	@Accept			json
 //	@Produce		json
 //	@Security		BearerAuth
-//	@Param			id		path		string	true	"Transaction ID"
+//	@Param			id		path		string								true	"Transaction ID"
+//	@Param			request	body		requestdto.DeleteTransactionRequest	true	"Cancel reason"
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
 //	@Router			/api/transactions/{id} [delete]
 func (h *TransactionHandler) Delete(c fiber.Ctx) error {
-	req := requestdto.DeleteTransactionRequest{ID: c.Params("id")}
-	if err := validate.Validate(&req); err != nil {
+	var req requestdto.DeleteTransactionRequest
+	if err := bindBody(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
+	}
+	role, _ := c.Locals("role").(string)
+	req.ID, req.UserID, req.Role = c.Params("id"), middleware.GetUserID(c), role
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	if err := h.trxUsecase.DeleteTransaction(c.Context(), &req); err != nil {
@@ -176,7 +182,7 @@ func (h *TransactionHandler) ReportMonth(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
 	}
 	req.UserId = middleware.GetUserID(c)
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	result, err := h.trxUsecase.PrintReportMonth(c.Context(), &req)
@@ -204,7 +210,7 @@ func (h *TransactionHandler) ReportTransaction(c fiber.Ctx) error {
 	if err := bindQuery(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	result, err := h.trxUsecase.PrintReportTransaction(c.Context(), &req)
@@ -212,4 +218,50 @@ func (h *TransactionHandler) ReportTransaction(c fiber.Ctx) error {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	return response.Success(c, fiber.StatusOK, "report generated", result)
+}
+
+// Sync godoc
+//
+//	@Summary		Sync offline transactions
+//	@Description	Records up to 100 cash/debt transactions made while the cashier was offline. Each item carries a client_ref (UUID) so resending the queue is safe; items succeed or fail independently. Stock may go negative, which flags the transaction as a stock conflict for review.
+//	@Tags			Transactions
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			request	body		requestdto.SyncTransactionsRequest	true	"Offline queue"
+//	@Success		200		{object}	response.APIResponse
+//	@Failure		400		{object}	response.APIResponse
+//	@Router			/api/transactions/sync [post]
+func (h *TransactionHandler) Sync(c fiber.Ctx) error {
+	var req requestdto.SyncTransactionsRequest
+	if err := bindBody(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
+	}
+	req.UserId = middleware.GetUserID(c)
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.trxUsecase.SyncOfflineTransactions(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "sync processed", result)
+}
+
+// ReviewConflict godoc
+//
+//	@Summary		Mark stock conflict reviewed
+//	@Description	Marks an offline transaction that pushed stock below zero as reviewed. Superadmin only.
+//	@Tags			Transactions
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Transaction ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		404	{object}	response.APIResponse
+//	@Router			/api/transactions/{id}/conflict-review [patch]
+func (h *TransactionHandler) ReviewConflict(c fiber.Ctx) error {
+	if err := h.trxUsecase.ReviewConflict(c.Context(), c.Params("id")); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "conflict marked as reviewed", nil)
 }

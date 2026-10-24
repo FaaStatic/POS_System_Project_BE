@@ -40,7 +40,7 @@ func (h *PaymentHandler) ChargeQris(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 	req.UserId = middleware.GetUserID(c)
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	res, err := h.usecase.ChargeQris(c.Context(), &req)
@@ -69,7 +69,7 @@ func (h *PaymentHandler) ChargeVA(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 	req.UserId = middleware.GetUserID(c)
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 	res, err := h.usecase.ChargeVA(c.Context(), &req)
@@ -125,4 +125,33 @@ func (h *PaymentHandler) Notification(c fiber.Ctx) error {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	return response.Success(c, fiber.StatusOK, "notification processed", nil)
+}
+
+// List godoc
+//
+//	@Summary		List payments
+//	@Description	Lists Midtrans QRIS/VA charges for monitoring, newest first. Superadmin only.
+//	@Tags			Payments
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			status		query		string	false	"pending, settling, success, failed or expired"
+//	@Param			method		query		string	false	"qris or va"
+//	@Param			date_start	query		string	false	"YYYY-MM-DD"
+//	@Param			date_end	query		string	false	"YYYY-MM-DD"
+//	@Param			limit		query		int		false	"1-100"
+//	@Success		200			{object}	response.APIResponse
+//	@Router			/api/payments [get]
+func (h *PaymentHandler) List(c fiber.Ctx) error {
+	var req requestdto.ListPaymentsRequest
+	if err := bindQuery(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.usecase.ListPayments(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "payments fetched", result)
 }

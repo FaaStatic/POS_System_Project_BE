@@ -4,7 +4,9 @@ import (
 	"shop_project_be/internal/delivery/http/middleware"
 	"shop_project_be/internal/domain"
 	requestdto "shop_project_be/internal/dto/request_dto"
+	responsedto "shop_project_be/internal/dto/response_dto"
 	"shop_project_be/pkg/response"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"go.uber.org/zap"
@@ -14,10 +16,52 @@ type UserHandler struct {
 	usecase    domain.UserUsecase
 	fcmUsecase domain.DeviceTokenUsecase
 	log        *zap.Logger
+	webCookie  WebCookieConfig
 }
 
-func NewUserHandler(usecase domain.UserUsecase, fcmUsecase domain.DeviceTokenUsecase, log *zap.Logger) *UserHandler {
-	return &UserHandler{usecase: usecase, fcmUsecase: fcmUsecase, log: log}
+// WebCookieConfig: Secure dimatikan hanya di development (http://localhost).
+type WebCookieConfig struct {
+	Secure     bool
+	RefreshTTL time.Duration
+}
+
+func NewUserHandler(usecase domain.UserUsecase, fcmUsecase domain.DeviceTokenUsecase, log *zap.Logger, webCookie WebCookieConfig) *UserHandler {
+	return &UserHandler{usecase: usecase, fcmUsecase: fcmUsecase, log: log, webCookie: webCookie}
+}
+
+const refreshCookieName = "refresh_token"
+
+// isWebClient: CMS web mengirim X-Client: web. Refresh token web hanya hidup di
+// cookie HttpOnly. Header custom ini juga penjaga CSRF: form atau link dari situs
+// lain tidak bisa menambahkan header tanpa lolos preflight CORS, jadi cookie
+// tidak pernah dipakai untuk request yang tidak membawanya.
+func isWebClient(c fiber.Ctx) bool {
+	return c.Get("X-Client") == "web"
+}
+
+func (h *UserHandler) setRefreshCookie(c fiber.Ctx, token string, maxAge int) {
+	c.Cookie(&fiber.Cookie{
+		Name:     refreshCookieName,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   maxAge,
+		Secure:   h.webCookie.Secure,
+		HTTPOnly: true,
+		SameSite: fiber.CookieSameSiteStrictMode,
+	})
+}
+
+func (h *UserHandler) clearRefreshCookie(c fiber.Ctx) {
+	h.setRefreshCookie(c, "", -1)
+}
+
+// moveRefreshToCookie memindahkan refresh token dari body ke cookie untuk klien web.
+func (h *UserHandler) moveRefreshToCookie(c fiber.Ctx, result *responsedto.UserLoginResponse) {
+	if !isWebClient(c) {
+		return
+	}
+	h.setRefreshCookie(c, result.RefreshToken, int(h.webCookie.RefreshTTL.Seconds()))
+	result.RefreshToken = ""
 }
 
 // Register godoc
@@ -38,7 +82,7 @@ func (h *UserHandler) Register(c fiber.Ctx) error {
 	if err := bindBody(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 
@@ -66,14 +110,17 @@ func (h *UserHandler) Login(c fiber.Ctx) error {
 	if err := bindBody(c, &req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
+
+	req.AdminOnly = isWebClient(c)
 
 	result, err := h.usecase.UserLogin(c.Context(), &req)
 	if err != nil {
 		return writeError(c, fiber.StatusUnauthorized, err)
 	}
+	h.moveRefreshToCookie(c, result)
 	return response.Success(c, fiber.StatusOK, "login success", result)
 }
 
@@ -94,6 +141,13 @@ func (h *UserHandler) Logout(c fiber.Ctx) error {
 	var req requestdto.UserLogoutRequest
 	if err := bindBody(c, &req); err != nil {
 		h.log.Debug("logout called without a parsable body", zap.Error(err))
+	}
+
+	if isWebClient(c) {
+		if req.RefreshToken == "" {
+			req.RefreshToken = c.Cookies(refreshCookieName)
+		}
+		h.clearRefreshCookie(c)
 	}
 
 	accessToken, _ := c.Locals("access_token").(string)
@@ -126,16 +180,148 @@ func (h *UserHandler) Logout(c fiber.Ctx) error {
 //	@Router			/auth/refresh [post]
 func (h *UserHandler) Refresh(c fiber.Ctx) error {
 	var req requestdto.UserRefreshTokenRequest
-	if err := bindBody(c, &req); err != nil {
+	web := isWebClient(c)
+	// Klien web boleh mengirim body kosong; tokennya ada di cookie.
+	if err := bindBody(c, &req); err != nil && !web {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
-	if err := validate.Validate(&req); err != nil {
+	if web && req.RefreshToken == "" {
+		req.RefreshToken = c.Cookies(refreshCookieName)
+	}
+	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
 
 	result, err := h.usecase.RefreshToken(c.Context(), &req)
 	if err != nil {
+		if web {
+			h.clearRefreshCookie(c)
+		}
 		return writeError(c, fiber.StatusUnauthorized, err)
 	}
+	h.moveRefreshToCookie(c, result)
 	return response.Success(c, fiber.StatusOK, "refresh success", result)
+}
+
+// ListStaff godoc
+//
+//	@Summary		List staff
+//	@Description	Lists user accounts. status=inactive returns deactivated accounts. Superadmin only.
+//	@Tags			Staff
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			status		query		string	false	"active (default) or inactive"
+//	@Param			search		query		string	false	"Username contains"
+//	@Param			limit		query		int		false	"1-100"
+//	@Param			after_id	query		string	false	"Cursor id"
+//	@Param			after_time	query		string	false	"Cursor time"
+//	@Success		200			{object}	response.APIResponse
+//	@Router			/api/users [get]
+func (h *UserHandler) ListStaff(c fiber.Ctx) error {
+	var req requestdto.ListStaffRequest
+	if err := bindQuery(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.usecase.ListStaff(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "staff fetched", result)
+}
+
+// UpdateStaff godoc
+//
+//	@Summary		Update staff
+//	@Description	Changes a staff username and/or password. A new password signs the staff out of every device. Superadmin only.
+//	@Tags			Staff
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id		path		string							true	"User ID"
+//	@Param			request	body		requestdto.UpdateStaffRequest	true	"Fields to change"
+//	@Success		200		{object}	response.APIResponse
+//	@Failure		403		{object}	response.APIResponse
+//	@Failure		409		{object}	response.APIResponse
+//	@Router			/api/users/{id} [patch]
+func (h *UserHandler) UpdateStaff(c fiber.Ctx) error {
+	var req requestdto.UpdateStaffRequest
+	if err := bindBody(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
+	}
+	req.ID = c.Params("id")
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	if err := h.usecase.UpdateStaff(c.Context(), &req); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "staff updated", nil)
+}
+
+// DeactivateStaff godoc
+//
+//	@Summary		Deactivate staff
+//	@Description	Deactivates a staff account, signs it out everywhere and removes its push tokens. History stays intact. Superadmin only.
+//	@Tags			Staff
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"User ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		404	{object}	response.APIResponse
+//	@Router			/api/users/{id} [delete]
+func (h *UserHandler) DeactivateStaff(c fiber.Ctx) error {
+	if err := h.usecase.DeactivateStaff(c.Context(), c.Params("id")); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "staff deactivated", nil)
+}
+
+// RestoreStaff godoc
+//
+//	@Summary		Restore staff
+//	@Description	Reactivates a deactivated staff account. Superadmin only.
+//	@Tags			Staff
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"User ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		404	{object}	response.APIResponse
+//	@Router			/api/users/{id}/restore [post]
+func (h *UserHandler) RestoreStaff(c fiber.Ctx) error {
+	if err := h.usecase.RestoreStaff(c.Context(), c.Params("id")); err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "staff restored", nil)
+}
+
+// PurgeStaff godoc
+//
+//	@Summary		Delete staff permanently
+//	@Description	Permanently removes a deactivated staff account. Accounts referenced by sales, payments or debts are anonymized instead (mode=anonymized) so reports stay intact. confirm must equal the username. Superadmin only.
+//	@Tags			Staff
+//	@Accept			json
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id		path		string						true	"User ID"
+//	@Param			request	body		requestdto.PurgeStaffRequest	true	"Username confirmation"
+//	@Success		200		{object}	response.APIResponse
+//	@Failure		409		{object}	response.APIResponse
+//	@Router			/api/users/{id}/permanent [delete]
+func (h *UserHandler) PurgeStaff(c fiber.Ctx) error {
+	var req requestdto.PurgeStaffRequest
+	if err := bindBody(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
+	}
+	req.ID = c.Params("id")
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.usecase.PurgeStaff(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "staff deleted", result)
 }
