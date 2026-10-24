@@ -44,6 +44,10 @@ func TestCreateWithReservation_Concurrent(t *testing.T) {
 		SKU:         "CONC-" + uuid.NewString()[:8],
 		ProductName: "concurrency test product",
 		Stock:       stock,
+		// Harus lolos chk_products_price_rules (migration 00004).
+		PurchasePrice:    1000,
+		SellingPrice:     2000,
+		SellingPriceDebt: 2100,
 	}
 	if err := db.Create(product).Error; err != nil {
 		t.Fatalf("seed product: %v", err)

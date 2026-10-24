@@ -31,10 +31,37 @@ type FilterTransactionRequest struct {
 	Order         string  `query:"order" validate:"omitempty,oneof=asc desc ASC DESC"`
 	AfterTime     *string `query:"after_time,omitempty"`
 	AfterID       *string `query:"after_id,omitempty"`
+	OpenConflict  bool    `query:"open_conflict"`
 }
 
 type DeleteTransactionRequest struct {
-	ID string `json:"trx_id" validate:"required,uuid"`
+	ID     string `json:"trx_id" validate:"required,uuid"`
+	Reason string `json:"reason" validate:"required,min=3,max=500"`
+	UserID string `json:"-"`
+	Role   string `json:"-"`
+}
+
+// SyncTransactionsRequest sengaja tidak memakai `dive`: satu item rusak tidak
+// boleh menahan seluruh antrean, jadi tiap item divalidasi di usecase dan
+// gagal sendiri-sendiri.
+type SyncTransactionsRequest struct {
+	UserId       string               `json:"-"`
+	Transactions []OfflineTransaction `json:"transactions" validate:"required,min=1,max=100"`
+}
+
+type OfflineTransaction struct {
+	ClientRef       string                     `json:"client_ref"`
+	CreatedAtClient string                     `json:"created_at_client"`
+	TypePayment     string                     `json:"type_payment"`
+	CustomerId      *string                    `json:"customer_id,omitempty"`
+	Details         []OfflineTransactionDetail `json:"details"`
+}
+
+type OfflineTransactionDetail struct {
+	ProductId   string  `json:"product_id"`
+	Qty         float64 `json:"qty"`
+	UnitPrice   int64   `json:"unit_price"`
+	Destination *string `json:"destination,omitempty"`
 }
 
 type PrintReportTransactionRequest struct {

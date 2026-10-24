@@ -9,7 +9,6 @@ import (
 
 	envconfig "shop_project_be/config/env_config"
 	middleware "shop_project_be/internal/delivery/http/middleware"
-	appvalidator "shop_project_be/pkg/validator"
 
 	"github.com/bytedance/sonic"
 	swagger "github.com/gofiber/contrib/v3/swaggerui"
@@ -26,7 +25,6 @@ func GetFiberConfig(logger *zap.Logger, appName string, trustedProxies []string)
 	return fiber.Config{
 		JSONEncoder:        sonic.Marshal,
 		JSONDecoder:        sonic.Unmarshal,
-		StructValidator:    appvalidator.New(),
 		ServerHeader:       "Fiber",
 		AppName:            appName,
 		ReadTimeout:        30 * time.Second,
@@ -107,14 +105,11 @@ func loadSwaggerSpec(nameApp string) []byte {
 }
 
 func GetSwaggerConfig(nameApp string, isDev bool) swagger.Config {
-	cacheAge := 1
-	if !isDev {
-		cacheAge = 3600
-	} else {
+	cacheAge := 3600
+	if isDev {
 		cacheAge = 1
 	}
 	return swagger.Config{
-		Next:        nil,
 		BasePath:    "/",
 		FilePath:    "./swagger.json",
 		FileContent: loadSwaggerSpec(nameApp),
@@ -124,26 +119,20 @@ func GetSwaggerConfig(nameApp string, isDev bool) swagger.Config {
 	}
 }
 
-func InitFiber(env string, envData *envconfig.Config, logger *zap.Logger, redisClient fiber.Storage, routes ...func(router fiber.Router)) *fiber.App {
+func InitFiber(env string, envData *envconfig.Config, logger *zap.Logger, redisClient fiber.Storage, routes func(router fiber.Router)) *fiber.App {
 	app := fiber.New(GetFiberConfig(logger, envData.App.Name, envData.App.TrustedProxies))
 	app.Use(recover.New(recover.Config{
 		EnableStackTrace: true,
 	}))
 	app.Use(helmet.New(middleware.GetXSSConfig()))
-	app.Use(compress.New(middleware.GetCompressConfig()))
-	app.Use(cors.New(middleware.GetCorsConfig()))
+	app.Use(compress.New())
+	app.Use(cors.New(middleware.GetCorsConfig(envData.App.CMSOrigins)))
 	app.Use(limiter.New(middleware.GetGlobalLimiter(redisClient)))
 	app.Use(middleware.LoggerMiddleware(logger))
 
-	if env != "production" {
-		app.Use(swagger.New(GetSwaggerConfig(envData.App.Name, true)))
-	} else {
-		app.Use(swagger.New(GetSwaggerConfig(envData.App.Name, false)))
-	}
+	app.Use(swagger.New(GetSwaggerConfig(envData.App.Name, env != "production")))
 
-	for _, register := range routes {
-		register(app)
-	}
+	routes(app)
 
 	app.Use(func(c fiber.Ctx) error {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{

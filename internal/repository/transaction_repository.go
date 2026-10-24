@@ -45,9 +45,11 @@ func (t *transactionRepository) CreateTransaction(ctx context.Context, transacti
 	var debtSnapshot *domain.TransactionDebtSnapshot
 	err := runTxDB(ctx, t.db, func(tx *gorm.DB) error {
 		if deductStock {
-			if err := decrementStock(tx, detailLines(transaction.TransactionDetail)); err != nil {
+			short, err := decrementStockLines(tx, detailLines(transaction.TransactionDetail), transaction.ClientRef != nil)
+			if err != nil {
 				return err
 			}
+			transaction.StockConflict = short
 		}
 
 		if isHutang && transaction.CustomerID != nil {
@@ -114,7 +116,7 @@ func (t *transactionRepository) CreateTransaction(ctx context.Context, transacti
 	return debtSnapshot, nil
 }
 
-func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.UUID) error {
+func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.UUID, reason string) error {
 	return runTxDB(ctx, t.db, func(tx *gorm.DB) error {
 		var trx domain.Transactions
 		if err := tx.Preload("TransactionDetail").Where("id = ?", id).First(&trx).Error; err != nil {
@@ -141,16 +143,21 @@ func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.U
 			case err != nil:
 				return internalErr(fmt.Errorf("failed to lock debt: %w", err))
 			default:
-				newTotal := debt.TotalDebt - trx.TotalTransaction
-				if newTotal < 0 {
-					newTotal = 0
+				// Dihitung setelah lock hutang: PayDebt juga lock baris ini, jadi
+				// cicilan yang masuk bersamaan tidak bisa lolos dari cek ini.
+				paidInstalments, err := countDebtPayments(tx, debt.ID)
+				if err != nil {
+					return err
 				}
-				newRemaining := debt.RemainingDebt - trx.TotalTransaction
-				if newRemaining < 0 {
-					newRemaining = 0
+				if paidInstalments > 0 {
+					return domain.Conflict(fmt.Sprintf(
+						"transaction %s cannot be deleted: its debt already has %d recorded payment(s); void the payments first",
+						trx.ID, paidInstalments))
 				}
+				newTotal := max(0, debt.TotalDebt-trx.TotalTransaction)
+				newRemaining := max(0, debt.RemainingDebt-trx.TotalTransaction)
 				status := enum.BELUM_LUNAS
-				if newRemaining <= 0 {
+				if newRemaining == 0 {
 					status = enum.LUNAS
 				}
 				if err := tx.Model(&domain.Debts{}).Where("id = ?", debt.ID).
@@ -164,6 +171,10 @@ func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.U
 			}
 		}
 
+		if err := tx.Model(&domain.Transactions{}).Where("id = ?", id).
+			Update("cancel_reason", reason).Error; err != nil {
+			return internalErr(fmt.Errorf("failed to save cancel reason: %w", err))
+		}
 		result := tx.Where("id = ?", id).Delete(&domain.Transactions{})
 		if result.Error != nil {
 			return internalErr(fmt.Errorf("failed to delete transaction: %w", result.Error))
@@ -176,18 +187,6 @@ func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.U
 }
 
 func assertTransactionDeletable(tx *gorm.DB, trx *domain.Transactions) error {
-	if trx.DebtID != nil {
-		paidInstalments, err := countDebtPayments(tx, *trx.DebtID)
-		if err != nil {
-			return err
-		}
-		if paidInstalments > 0 {
-			return domain.Conflict(fmt.Sprintf(
-				"transaction %s cannot be deleted: its debt already has %d recorded payment(s); void the payments first",
-				trx.ID, paidInstalments))
-		}
-	}
-
 	var settledPayments int64
 	if err := tx.Model(&domain.Payment{}).
 		Where("status IN ?", []domain.PaymentStatus{domain.PaymentSuccess, domain.PaymentSettling}).
@@ -224,6 +223,9 @@ func (t *transactionRepository) GetAllTransaction(ctx context.Context, filter do
 	if filter.DateUntil != nil {
 		query = query.Where("created_at < ?", *filter.DateUntil)
 	}
+	if filter.OpenConflict {
+		query = query.Where("stock_conflict AND conflict_reviewed_at IS NULL")
+	}
 
 	var items []*domain.Transactions
 	if err := keysetPage(query, "", limit, order, filter.Cursor).Find(&items).Error; err != nil {
@@ -242,6 +244,8 @@ func monthRange(month, year int) (time.Time, time.Time) {
 	return start, start.AddDate(0, 1, 0)
 }
 
+// security: col dan konstanta enum yang disisipkan ke SQL lewat storeDate/Sprintf
+// di file ini selalu literal dari kode, bukan input user.
 // storeDate harus sezona dengan domain.StoreLocation (WIB, UTC+7) yang dipakai
 // monthRange; ubah keduanya bersamaan.
 func storeDate(col string) string {
@@ -250,24 +254,6 @@ func storeDate(col string) string {
 
 const soldProductName = "COALESCE(NULLIF(transactions_detail.product_name, ''), products.product_name)"
 
-func (t *transactionRepository) GetMonthlyReport(ctx context.Context, month int, year int) (*domain.MonthlyReport, error) {
-	start, end := monthRange(month, year)
-
-	var report domain.MonthlyReport
-	result := t.db.WithContext(ctx).
-		Model(&domain.Transactions{}).
-		Where("created_at >= ? AND created_at < ?", start, end).
-		Select(fmt.Sprintf(`COUNT(*) AS total_transaction,
-			COALESCE(SUM(total_transaction) FILTER (WHERE payment_type <> %d), 0)::bigint AS total_revenue,
-			COALESCE(SUM(total_transaction) FILTER (WHERE payment_type = %d), 0)::bigint AS total_debt,
-			COALESCE(SUM(total_transaction), 0)::bigint AS grand_total`, int(enum.Hutang), int(enum.Hutang))).
-		Scan(&report)
-	if result.Error != nil {
-		return nil, fmt.Errorf("failed to get monthly report: %w", result.Error)
-	}
-	return &report, nil
-}
-
 func (t *transactionRepository) GetDailyReport(ctx context.Context, month int, year int) ([]domain.DailyReport, error) {
 	start, end := monthRange(month, year)
 	day := storeDate("created_at")
@@ -275,17 +261,43 @@ func (t *transactionRepository) GetDailyReport(ctx context.Context, month int, y
 	var rows []domain.DailyReport
 	result := t.db.WithContext(ctx).
 		Model(&domain.Transactions{}).
+		Joins(`LEFT JOIN LATERAL (
+			SELECT COALESCE(SUM(ROUND(d.purchase_price * d.qty)), 0)::bigint AS cost
+			FROM transactions_detail d WHERE d.transaction_id = transactions.id
+		) AS line_cost ON true`).
 		Where("created_at >= ? AND created_at < ?", start, end).
-		Select(fmt.Sprintf(`%s AS date,
-			COUNT(*) AS total_transaction,
-			COALESCE(SUM(total_transaction) FILTER (WHERE payment_type <> %d), 0)::bigint AS total_revenue,
-			COALESCE(SUM(total_transaction) FILTER (WHERE payment_type = %d), 0)::bigint AS total_debt,
-			COALESCE(SUM(total_transaction), 0)::bigint AS grand_total`, day, int(enum.Hutang), int(enum.Hutang))).
+		Select(fmt.Sprintf(`%[1]s AS date,
+			COUNT(*) FILTER (WHERE payment_type <> %[2]d) AS count_sale,
+			COALESCE(SUM(total_transaction) FILTER (WHERE payment_type <> %[2]d), 0)::bigint AS revenue,
+			COALESCE(SUM(line_cost.cost) FILTER (WHERE payment_type <> %[2]d), 0)::bigint AS cost,
+			COUNT(*) FILTER (WHERE payment_type = %[2]d) AS count_debt,
+			COALESCE(SUM(total_transaction) FILTER (WHERE payment_type = %[2]d), 0)::bigint AS debt_sales,
+			COALESCE(SUM(line_cost.cost) FILTER (WHERE payment_type = %[2]d), 0)::bigint AS debt_cost`, day, int(enum.Hutang))).
 		Group(day).
 		Order(day + " ASC").
 		Scan(&rows)
 	if result.Error != nil {
 		return nil, fmt.Errorf("failed to get daily report: %w", result.Error)
+	}
+	return rows, nil
+}
+
+// GetDailyDebtFlow: hutang manual (debt_adjustments) dan pembayaran hutang
+// (debt_payments) per hari. Pembayaran hanya mengurangi saldo, tidak terikat barang.
+func (t *transactionRepository) GetDailyDebtFlow(ctx context.Context, month int, year int) ([]domain.DailyDebtFlow, error) {
+	start, end := monthRange(month, year)
+
+	var rows []domain.DailyDebtFlow
+	result := t.db.WithContext(ctx).Raw(`SELECT date, SUM(manual)::bigint AS manual, SUM(paid)::bigint AS paid FROM (
+			SELECT `+storeDate("created_at")+` AS date, amount AS manual, 0 AS paid
+			FROM debt_adjustments WHERE created_at >= ? AND created_at < ?
+			UNION ALL
+			SELECT `+storeDate("tanggal_bayar")+`, 0, nominal_bayar
+			FROM debt_payments WHERE tanggal_bayar >= ? AND tanggal_bayar < ?
+		) AS flow GROUP BY date ORDER BY date`, start, end, start, end).
+		Scan(&rows)
+	if result.Error != nil {
+		return nil, fmt.Errorf("failed to get daily debt flow: %w", result.Error)
 	}
 	return rows, nil
 }
@@ -329,8 +341,9 @@ func (t *transactionRepository) GetDailyProductSold(ctx context.Context, month i
 
 func (t *transactionRepository) GetTransactionByID(ctx context.Context, id uuid.UUID) (*domain.Transactions, error) {
 	var item domain.Transactions
-	result := t.db.WithContext(ctx).Preload("User").
-		Preload("Customer").
+	// Kasir/customer yang sudah dinonaktifkan tetap tampil di detail dan struk lama.
+	result := t.db.WithContext(ctx).Preload("User", unscoped).
+		Preload("Customer", unscoped).
 		Preload("TransactionDetail").Where("id = ?", id).First(&item)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
@@ -339,4 +352,31 @@ func (t *transactionRepository) GetTransactionByID(ctx context.Context, id uuid.
 		return nil, fmt.Errorf("failed to get transaction: %w", result.Error)
 	}
 	return &item, nil
+}
+
+// GetTransactionByClientRef ikut membaca transaksi yang sudah dibatalkan, supaya
+// antrean offline yang dikirim ulang tidak menghidupkannya kembali. nil = belum ada.
+func (t *transactionRepository) GetTransactionByClientRef(ctx context.Context, ref uuid.UUID) (*domain.Transactions, error) {
+	var item domain.Transactions
+	result := t.db.WithContext(ctx).Unscoped().Where("client_ref = ?", ref).First(&item)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get transaction by client ref: %w", result.Error)
+	}
+	return &item, nil
+}
+
+func (t *transactionRepository) MarkConflictReviewed(ctx context.Context, id uuid.UUID) error {
+	result := t.db.WithContext(ctx).Model(&domain.Transactions{}).
+		Where("id = ? AND stock_conflict", id).
+		Update("conflict_reviewed_at", time.Now())
+	if result.Error != nil {
+		return fmt.Errorf("failed to mark conflict reviewed: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return domain.NotFound(fmt.Sprintf("transaction %s with a stock conflict not found", id))
+	}
+	return nil
 }

@@ -67,3 +67,26 @@ func TestBuildOrder_AllowsPhysicalProduct(t *testing.T) {
 		t.Fatalf("expected 1 payment item, got %d", len(items))
 	}
 }
+
+func TestSameItems(t *testing.T) {
+	beras, gula := uuid.New(), uuid.New()
+	items := []domain.PaymentItem{{ProductID: beras, Qty: 2}, {ProductID: gula, Qty: 1.5}}
+
+	cases := []struct {
+		name    string
+		details []domain.TransactionsDetail
+		want    bool
+	}{
+		{"same items, different order", []domain.TransactionsDetail{{ProductID: gula, Qty: 1.5}, {ProductID: beras, Qty: 2}}, true},
+		{"different qty", []domain.TransactionsDetail{{ProductID: beras, Qty: 1}, {ProductID: gula, Qty: 1.5}}, false},
+		{"different product", []domain.TransactionsDetail{{ProductID: beras, Qty: 2}, {ProductID: uuid.New(), Qty: 1.5}}, false},
+		{"fewer lines", []domain.TransactionsDetail{{ProductID: beras, Qty: 2}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameItems(tc.details, items); got != tc.want {
+				t.Errorf("sameItems = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

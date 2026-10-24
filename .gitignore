@@ -1,6 +1,5 @@
 .env.development
 .env
-go.sum
 logs/
 storage/
 .config.development.yaml

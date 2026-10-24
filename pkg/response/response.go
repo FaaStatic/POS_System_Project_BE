@@ -8,7 +8,6 @@ type APIResponse struct {
 	Data         interface{} `json:"data,omitempty"`
 	ResponseCode int         `json:"ResponseCode"`
 	Error        string      `json:"error,omitempty"`
-	Meta         interface{} `json:"meta,omitempty"`
 }
 
 func Success(c fiber.Ctx, statusCode int, message string, data interface{}) error {
@@ -30,13 +29,4 @@ func Error(c fiber.Ctx, statusCode int, message string, err error) error {
 		resp.Error = err.Error()
 	}
 	return c.Status(statusCode).JSON(resp)
-}
-
-func Paginated(c fiber.Ctx, statusCode int, message string, data interface{}) error {
-	return c.Status(statusCode).JSON(APIResponse{
-		Success:      true,
-		Message:      message,
-		Data:         data,
-		ResponseCode: statusCode,
-	})
 }

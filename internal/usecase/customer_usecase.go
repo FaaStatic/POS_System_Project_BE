@@ -18,6 +18,7 @@ func toCustomerResponse(c *domain.Customers) responsedto.CustomerDtoResponse {
 		Nama:   c.Name,
 		NoHP:   c.Phone,
 		Alamat: c.Address,
+		Active: !c.DeletedAt.Valid,
 	}
 }
 
@@ -69,13 +70,9 @@ func (c *customerUsecase) GetCustomerShop(ctx context.Context, request *requestd
 		return nil, domain.InvalidID("invalid customer id format")
 	}
 
-	customer, err := c.customerRepo.GetCustomer(ctx, id)
+	customer, err := c.customerRepo.GetCustomer(ctx, id, request.IncludeInactive)
 	if err != nil {
-		c.log.Error("failed to get customer", zap.Error(err))
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("failed to get customer: %w", domain.ErrInternal)
+		return nil, passOrInternal(c.log, err, "failed to get customer", domain.ErrNotFound)
 	}
 
 	response := toCustomerResponse(customer)
@@ -89,10 +86,11 @@ func (c *customerUsecase) GetListCustomerShop(ctx context.Context, request *requ
 	}
 
 	filter := domain.FilterCustomer{
-		Search: request.Search,
-		Cursor: cursor,
-		Limit:  request.Limit,
-		Order:  request.Order,
+		Search:   request.Search,
+		Inactive: request.Status == "inactive",
+		Cursor:   cursor,
+		Limit:    request.Limit,
+		Order:    request.Order,
 	}
 
 	result, err := c.customerRepo.GetAllCustomer(ctx, filter)
@@ -137,11 +135,42 @@ func (c *customerUsecase) UpdateCustomerShop(ctx context.Context, request *reque
 		return domain.Validation("no fields to update")
 	}
 	if err := c.customerRepo.UpdateCustomer(ctx, id, fields); err != nil {
-		c.log.Error("failed to update customer", zap.Error(err))
-		if errors.Is(err, domain.ErrNotFound) {
-			return err
-		}
-		return fmt.Errorf("failed to update customer: %w", domain.ErrInternal)
+		return passOrInternal(c.log, err, "failed to update customer", domain.ErrNotFound)
 	}
 	return nil
+}
+
+func (c *customerUsecase) RestoreCustomerShop(ctx context.Context, rawID string) error {
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		return domain.InvalidID("invalid customer id format")
+	}
+	if err := c.customerRepo.RestoreCustomer(ctx, id); err != nil {
+		return passOrInternal(c.log, err, "failed to restore customer", domain.ErrNotFound)
+	}
+	return nil
+}
+
+func (c *customerUsecase) PurgeCustomerShop(ctx context.Context, rawID string) (*responsedto.PurgeResponse, error) {
+	id, err := uuid.Parse(rawID)
+	if err != nil {
+		return nil, domain.InvalidID("invalid customer id format")
+	}
+	anonymized, err := c.customerRepo.PurgeCustomer(ctx, id, map[string]any{
+		"name":    "Customer terhapus",
+		"phone":   "",
+		"address": "",
+	})
+	if err != nil {
+		return nil, passOrInternal(c.log, err, "failed to delete customer", domain.ErrNotFound, domain.ErrConflict)
+	}
+	return &responsedto.PurgeResponse{Mode: purgeMode(anonymized)}, nil
+}
+
+// purgeMode: "anonymized" berarti baris tetap ada karena dirujuk riwayat.
+func purgeMode(anonymized bool) string {
+	if anonymized {
+		return "anonymized"
+	}
+	return "deleted"
 }

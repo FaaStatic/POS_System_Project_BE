@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
@@ -50,7 +51,7 @@ func (f *fakeTrxRepo) CreateTransaction(ctx context.Context, transaction *domain
 	return f.createDebtSnap, nil
 }
 
-func (f *fakeTrxRepo) DeleteTransaction(ctx context.Context, id uuid.UUID) error {
+func (f *fakeTrxRepo) DeleteTransaction(ctx context.Context, id uuid.UUID, reason string) error {
 	f.deletedID = id
 	return f.deleteErr
 }
@@ -386,7 +387,7 @@ func TestDeleteTransaction_Success(t *testing.T) {
 	u := newTestTransactionUsecase(trxRepo, &fakeTrxProductRepo{}, &fakeTrxUserRepo{})
 
 	id := uuid.New()
-	if err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{ID: id.String()}); err != nil {
+	if err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{Role: "superadmin", ID: id.String()}); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 	if trxRepo.deletedID != id {
@@ -398,7 +399,7 @@ func TestDeleteTransaction_InvalidID(t *testing.T) {
 	trxRepo := &fakeTrxRepo{}
 	u := newTestTransactionUsecase(trxRepo, &fakeTrxProductRepo{}, &fakeTrxUserRepo{})
 
-	err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{ID: "not-a-uuid"})
+	err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{Role: "superadmin", ID: "not-a-uuid"})
 	if err == nil {
 		t.Fatal("expected error for invalid transaction id")
 	}
@@ -408,7 +409,7 @@ func TestDeleteTransaction_NotFoundPropagatesRepoError(t *testing.T) {
 	trxRepo := &fakeTrxRepo{deleteErr: errNotFoundFixture}
 	u := newTestTransactionUsecase(trxRepo, &fakeTrxProductRepo{}, &fakeTrxUserRepo{})
 
-	err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{ID: uuid.New().String()})
+	err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{Role: "superadmin", ID: uuid.New().String()})
 	if err == nil || err.Error() != errNotFoundFixture.Error() {
 		t.Fatalf("expected the repository's not-found error to pass through, got: %v", err)
 	}
@@ -418,7 +419,7 @@ func TestDeleteTransaction_InternalErrorIsHidden(t *testing.T) {
 	trxRepo := &fakeTrxRepo{createErr: nil, deleteErr: wrapInternal(errBoomFixture)}
 	u := newTestTransactionUsecase(trxRepo, &fakeTrxProductRepo{}, &fakeTrxUserRepo{})
 
-	err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{ID: uuid.New().String()})
+	err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{Role: "superadmin", ID: uuid.New().String()})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -458,5 +459,75 @@ func TestGetTransaction_Success(t *testing.T) {
 	}
 	if len(resp.TransactionDetails) != 1 || resp.TransactionDetails[0].ProductName != "Air Mineral" {
 		t.Errorf("unexpected transaction details: %+v", resp.TransactionDetails)
+	}
+}
+
+func TestMergeDailyReport_KeepsPaymentOnlyDaysAndSortsByDate(t *testing.T) {
+	day1 := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	day2 := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
+	day3 := time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC)
+
+	daily := mergeDailyReport(
+		[]domain.DailyReport{
+			{Date: day3, CountSale: 1, Revenue: 5000, Cost: 4000},
+			{Date: day1, CountDebt: 2, DebtSales: 21000, DebtCost: 16000},
+		},
+		[]domain.DailyDebtFlow{
+			{Date: day1, Manual: 50000},
+			{Date: day2, Paid: 10000},
+		},
+	)
+
+	if len(daily) != 3 {
+		t.Fatalf("got %d rows, want 3 (payment-only day must appear)", len(daily))
+	}
+	for i, want := range []time.Time{day1, day2, day3} {
+		if !daily[i].Date.Equal(want) {
+			t.Errorf("row %d date = %v, want %v", i, daily[i].Date, want)
+		}
+	}
+	if daily[0].DebtSales != 21000 || daily[0].DebtManual != 50000 {
+		t.Errorf("day1 must merge sales and manual debt: %+v", daily[0])
+	}
+	if daily[1].DebtPaid != 10000 || daily[1].Revenue != 0 {
+		t.Errorf("day2 must hold only the payment: %+v", daily[1])
+	}
+}
+
+func TestDeleteTransaction_StaffRules(t *testing.T) {
+	staffID := uuid.New()
+	now := time.Now()
+	cases := []struct {
+		name      string
+		owner     uuid.UUID
+		createdAt time.Time
+		wantErr   error
+	}{
+		{"own transaction today", staffID, now, nil},
+		{"someone else's transaction", uuid.New(), now, domain.ErrForbidden},
+		{"own transaction from yesterday", staffID, now.AddDate(0, 0, -1), domain.ErrForbidden},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			trxID := uuid.New()
+			trxRepo := &fakeTrxRepo{getByIDResult: &domain.Transactions{ID: trxID, UserID: tc.owner, CreatedAt: tc.createdAt}}
+			u := newTestTransactionUsecase(trxRepo, &fakeTrxProductRepo{}, &fakeTrxUserRepo{})
+
+			err := u.DeleteTransaction(context.Background(), &requestdto.DeleteTransactionRequest{
+				ID: trxID.String(), UserID: staffID.String(), Role: "staff",
+			})
+			if tc.wantErr == nil {
+				if err != nil || trxRepo.deletedID != trxID {
+					t.Fatalf("staff must cancel own same-day transaction; err=%v deleted=%s", err, trxRepo.deletedID)
+				}
+				return
+			}
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if trxRepo.deletedID != uuid.Nil {
+				t.Error("repository delete must not run when the staff rule rejects")
+			}
+		})
 	}
 }

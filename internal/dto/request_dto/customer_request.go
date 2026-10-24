@@ -18,6 +18,7 @@ type DeleteCustomer struct {
 }
 
 type GetAllCustomer struct {
+	Status    string  `query:"status" validate:"omitempty,oneof=active inactive"`
 	Limit     int     `query:"limit" validate:"omitempty,min=1,max=100"`
 	Search    string  `query:"search"`
 	Order     string  `query:"order" validate:"omitempty,oneof=asc desc ASC DESC"`
@@ -27,4 +28,6 @@ type GetAllCustomer struct {
 
 type GetCustomer struct {
 	CustomerId string `query:"customer_id" validate:"required,uuid"`
+	// IncludeInactive diisi handler: hanya superadmin yang boleh membuka customer nonaktif.
+	IncludeInactive bool `query:"-"`
 }

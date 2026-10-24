@@ -3,14 +3,22 @@ package handler
 import (
 	"errors"
 
+	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
 	"shop_project_be/pkg/response"
-	appvalidator "shop_project_be/pkg/validator"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/gofiber/fiber/v3"
 )
 
-var validate = appvalidator.New()
+var validate = validator.New(validator.WithRequiredStructEnabled())
+
+// isSuperadmin dipakai untuk aturan per-field yang tidak bisa diekspresikan
+// lewat RequireRole di route (mis. staff boleh PATCH produk, tapi bukan harga dasar).
+func isSuperadmin(c fiber.Ctx) bool {
+	role, _ := c.Locals("role").(string)
+	return role == enum.Superadmin.String()
+}
 
 func bindBody(c fiber.Ctx, out any) error {
 	return c.Bind().SkipValidation(true).Body(out)
@@ -36,7 +44,7 @@ func writeError(c fiber.Ctx, fallback int, err error) error {
 		return response.Error(c, fiber.StatusConflict, err.Error(), err)
 	case errors.Is(err, domain.ErrInvalidSignature):
 		return response.Error(c, fiber.StatusForbidden, err.Error(), err)
-	case errors.Is(err, domain.ErrPaymentAccessDenied):
+	case errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrPaymentAccessDenied):
 		return response.Error(c, fiber.StatusForbidden, err.Error(), err)
 	default:
 		return response.Error(c, fallback, err.Error(), err)

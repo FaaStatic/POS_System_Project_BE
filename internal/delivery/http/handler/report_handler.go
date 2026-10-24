@@ -23,7 +23,7 @@ import (
 //	@Router			/api/reports/{file} [get]
 func DownloadReport(c fiber.Ctx) error {
 	name := c.Params("file")
-	if role, _ := c.Locals("role").(string); role != "superadmin" && !strings.HasPrefix(name, "struk-") {
+	if !isSuperadmin(c) && !strings.HasPrefix(name, "struk-") {
 		return response.Error(c, fiber.StatusForbidden, "akses ditolak", nil)
 	}
 	path, ok := pdf.ReportPath(name)

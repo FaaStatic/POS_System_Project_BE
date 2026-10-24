@@ -28,3 +28,14 @@ type MidtransNotificationRequest struct {
 	PaymentType       string `json:"payment_type"`
 	TransactionID     string `json:"transaction_id"`
 }
+
+type ListPaymentsRequest struct {
+	Status    string  `query:"status" validate:"omitempty,oneof=pending settling success failed expired"`
+	Method    string  `query:"method" validate:"omitempty,oneof=qris va"`
+	DateStart *string `query:"date_start,omitempty"`
+	DateEnd   *string `query:"date_end,omitempty"`
+	Limit     int     `query:"limit" validate:"omitempty,min=1,max=100"`
+	Order     string  `query:"order" validate:"omitempty,oneof=asc desc ASC DESC"`
+	AfterID   *string `query:"after_id,omitempty"`
+	AfterTime *string `query:"after_time,omitempty"`
+}

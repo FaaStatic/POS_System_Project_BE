@@ -18,10 +18,9 @@ import (
 type fakeDebtRepo struct {
 	domain.DebtRepository
 
-	addErr    error
-	added     *domain.Debts
-	deleteErr error
-	deletedID uuid.UUID
+	addErr  error
+	added   *domain.Debts
+	addedBy uuid.UUID
 
 	getByIDResult *domain.Debts
 	getByIDErr    error
@@ -35,14 +34,10 @@ type fakeDebtRepo struct {
 	payPayment *domain.DebtPayments
 }
 
-func (f *fakeDebtRepo) AddDebt(ctx context.Context, debt *domain.Debts) error {
+func (f *fakeDebtRepo) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID) error {
 	f.added = debt
+	f.addedBy = userID
 	return f.addErr
-}
-
-func (f *fakeDebtRepo) DeleteDebt(ctx context.Context, id uuid.UUID) error {
-	f.deletedID = id
-	return f.deleteErr
 }
 
 func (f *fakeDebtRepo) GetDebtByID(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
@@ -71,11 +66,11 @@ func TestAddingDebtCustomer_Success(t *testing.T) {
 	repo := &fakeDebtRepo{}
 	u := newTestDebtUsecase(repo)
 
-	customerID := uuid.New().String()
+	userID := uuid.New()
 	req := &requestdto.AddDebtRequest{
-		CustomerID:     customerID,
+		CustomerID:     uuid.New().String(),
 		TotalTransaksi: 50000,
-		JatuhTempo:     "2026-08-01",
+		UserID:         userID.String(),
 	}
 	if err := u.AddingDebtCustomer(context.Background(), req); err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -89,6 +84,12 @@ func TestAddingDebtCustomer_Success(t *testing.T) {
 	if repo.added.Status != enum.BELUM_LUNAS {
 		t.Errorf("expected status BELUM_LUNAS on creation, got %v", repo.added.Status)
 	}
+	if !repo.added.DueDate.IsZero() {
+		t.Errorf("jatuh_tempo is optional; due date = %v, want zero", repo.added.DueDate)
+	}
+	if repo.addedBy != userID {
+		t.Errorf("addedBy = %s, want %s", repo.addedBy, userID)
+	}
 }
 
 func TestAddingDebtCustomer_InvalidCustomerID(t *testing.T) {
@@ -96,7 +97,7 @@ func TestAddingDebtCustomer_InvalidCustomerID(t *testing.T) {
 	u := newTestDebtUsecase(repo)
 
 	err := u.AddingDebtCustomer(context.Background(), &requestdto.AddDebtRequest{
-		CustomerID: "not-a-uuid", TotalTransaksi: 1000, JatuhTempo: "2026-08-01",
+		CustomerID: "not-a-uuid", TotalTransaksi: 1000, UserID: uuid.New().String(),
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid customer id")
@@ -111,33 +112,10 @@ func TestAddingDebtCustomer_InvalidDueDate(t *testing.T) {
 	u := newTestDebtUsecase(repo)
 
 	err := u.AddingDebtCustomer(context.Background(), &requestdto.AddDebtRequest{
-		CustomerID: uuid.New().String(), TotalTransaksi: 1000, JatuhTempo: "01/08/2026",
+		CustomerID: uuid.New().String(), TotalTransaksi: 1000, JatuhTempo: "01/08/2026", UserID: uuid.New().String(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "jatuh_tempo") {
 		t.Fatalf("expected a jatuh_tempo format error, got: %v", err)
-	}
-}
-
-func TestDeleteDebtCustomer_Success(t *testing.T) {
-	repo := &fakeDebtRepo{}
-	u := newTestDebtUsecase(repo)
-
-	id := uuid.New()
-	if err := u.DeleteDebtCustomer(context.Background(), &requestdto.DeleteDebtRequest{DebtId: id.String()}); err != nil {
-		t.Fatalf("expected no error, got: %v", err)
-	}
-	if repo.deletedID != id {
-		t.Errorf("expected DeleteDebt called with %s, got %s", id, repo.deletedID)
-	}
-}
-
-func TestDeleteDebtCustomer_InvalidID(t *testing.T) {
-	repo := &fakeDebtRepo{}
-	u := newTestDebtUsecase(repo)
-
-	err := u.DeleteDebtCustomer(context.Background(), &requestdto.DeleteDebtRequest{DebtId: "bad"})
-	if err == nil {
-		t.Fatal("expected error for invalid debt id")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	requestdto "shop_project_be/internal/dto/request_dto"
 	responsedto "shop_project_be/internal/dto/response_dto"
 	"shop_project_be/pkg/pdf"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -50,14 +51,22 @@ func ensureInvoicePrefix(noInvoice string) string {
 }
 
 func (t *transactionUsecase) AddTransaction(ctx context.Context, dto *requestdto.AddTransactionRequest) (*responsedto.AddTransactionResponse, error) {
-	return t.addTransaction(ctx, dto, true)
+	return t.addTransaction(ctx, dto, true, nil)
 }
 
 func (t *transactionUsecase) AddPrepaidTransaction(ctx context.Context, dto *requestdto.AddTransactionRequest) (*responsedto.AddTransactionResponse, error) {
-	return t.addTransaction(ctx, dto, false)
+	return t.addTransaction(ctx, dto, false, nil)
 }
 
-func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto.AddTransactionRequest, deductStock bool) (*responsedto.AddTransactionResponse, error) {
+// offlineSale membawa identitas transaksi yang dibuat kasir saat offline.
+type offlineSale struct {
+	clientRef uuid.UUID
+	soldAt    time.Time
+}
+
+// addTransaction: offline != nil memakai harga snapshot dari kasir (pembeli sudah
+// membayar harga itu) dan waktu jual dari device, serta membiarkan stok minus.
+func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto.AddTransactionRequest, deductStock bool, offline *offlineSale) (*responsedto.AddTransactionResponse, error) {
 	noInvoice := ensureInvoicePrefix(dto.NoInvoice)
 
 	userId, err := uuid.Parse(dto.UserId)
@@ -67,11 +76,7 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 	}
 
 	if _, err := t.userRepo.GetUserById(ctx, userId); err != nil {
-		t.log.Error("failed to get user", zap.Error(err))
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("failed to get user: %w", domain.ErrInternal)
+		return nil, passOrInternal(t.log, err, "failed to get user", domain.ErrNotFound)
 	}
 
 	var customerId *uuid.UUID
@@ -130,10 +135,10 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 		}
 
 		unitPrice := product.SellingPrice
-		if isHutang && !product.ProductType.IsDigital() {
+		if isHutang {
 			unitPrice = product.SellingPriceDebt
 		}
-		if !deductStock && detail.UnitPrice != nil {
+		if (!deductStock || offline != nil) && detail.UnitPrice != nil {
 			unitPrice = *detail.UnitPrice
 		}
 
@@ -171,6 +176,10 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 		TotalTransaction:  total,
 		TransactionDetail: detailTrx,
 	}
+	if offline != nil {
+		data.ClientRef = &offline.clientRef
+		data.CreatedAt = offline.soldAt
+	}
 
 	debtSnapshot, err := t.trxRepo.CreateTransaction(ctx, data, isHutang, deductStock)
 	if err != nil {
@@ -186,6 +195,7 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 		NoInvoice:        data.NoInvoice,
 		TotalTransaction: data.TotalTransaction,
 		PaymentType:      paymentType.String(),
+		StockConflict:    data.StockConflict,
 	}
 	if debtSnapshot != nil {
 		resp.DebtInfo = &responsedto.DebtTransactionInfo{
@@ -207,7 +217,12 @@ func (t *transactionUsecase) DeleteTransaction(ctx context.Context, dto *request
 		t.log.Error("transaction id parse fail", zap.Error(err))
 		return domain.InvalidID("invalid transaction id format")
 	}
-	if err := t.trxRepo.DeleteTransaction(ctx, trxId); err != nil {
+	if dto.Role != enum.Superadmin.String() {
+		if err := t.assertStaffCanCancel(ctx, trxId, dto.UserID); err != nil {
+			return err
+		}
+	}
+	if err := t.trxRepo.DeleteTransaction(ctx, trxId, strings.TrimSpace(dto.Reason)); err != nil {
 		t.log.Error("transaction delete fail", zap.Error(err))
 		if errors.Is(err, domain.ErrInternal) {
 			return fmt.Errorf("failed to delete transaction: %w", domain.ErrInternal)
@@ -215,6 +230,24 @@ func (t *transactionUsecase) DeleteTransaction(ctx context.Context, dto *request
 		return err
 	}
 
+	return nil
+}
+
+// assertStaffCanCancel: staff hanya boleh membatalkan transaksinya sendiri di
+// hari yang sama (WIB). Pemilik dan created_at tidak pernah berubah, jadi cek di
+// luar transaksi DB aman.
+func (t *transactionUsecase) assertStaffCanCancel(ctx context.Context, trxID uuid.UUID, rawUserID string) error {
+	trx, err := t.trxRepo.GetTransactionByID(ctx, trxID)
+	if err != nil {
+		return passOrInternal(t.log, err, "failed to delete transaction", domain.ErrNotFound)
+	}
+	if trx.UserID.String() != rawUserID {
+		return domain.Forbidden("staff can only cancel their own transactions")
+	}
+	now := time.Now().In(domain.StoreLocation)
+	if trx.CreatedAt.In(domain.StoreLocation).Format(dateLayout) != now.Format(dateLayout) {
+		return domain.Forbidden("staff can only cancel transactions created today; ask a superadmin")
+	}
 	return nil
 }
 
@@ -246,14 +279,15 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 	}
 
 	filter := &domain.FilterTransaction{
-		NoInvoices: dto.InvoiceNumber,
-		CustomerID: customerID,
-		Cursor:     cursor,
-		DateFrom:   dateFrom,
-		DateUntil:  dateUntil,
-		Limit:      dto.Limit,
-		Order:      dto.Order,
-		TypeTrx:    dto.TypePayment,
+		NoInvoices:   dto.InvoiceNumber,
+		CustomerID:   customerID,
+		Cursor:       cursor,
+		DateFrom:     dateFrom,
+		DateUntil:    dateUntil,
+		Limit:        dto.Limit,
+		Order:        dto.Order,
+		TypeTrx:      dto.TypePayment,
+		OpenConflict: dto.OpenConflict,
 	}
 
 	result, err := t.trxRepo.GetAllTransaction(ctx, *filter)
@@ -266,19 +300,15 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 	for _, trx := range result.DataItem {
 		details := make([]*responsedto.ProductTransactionResponse, 0, len(trx.TransactionDetail))
 		for _, d := range trx.TransactionDetail {
-			details = append(details, &responsedto.ProductTransactionResponse{
-				ProductID:   d.ProductID,
-				ProductName: d.ProductName,
-				Price:       d.Price,
-				Qty:         d.Qty,
-				Subtotal:    d.Subtotal,
-			})
+			details = append(details, toProductTrxResponse(d))
 		}
 		responses = append(responses, &responsedto.TransactionResponse{
 			TransactionID:      trx.ID,
 			InvoiceNumber:      trx.NoInvoice,
 			PaymentType:        int(trx.PaymentType),
 			TotalTransaction:   trx.TotalTransaction,
+			StockConflict:      trx.StockConflict,
+			ConflictReviewed:   trx.ConflictReviewedAt != nil,
 			CreatedAt:          trx.CreatedAt.Format(time.RFC3339),
 			TransactionDetails: details,
 		})
@@ -295,6 +325,16 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 	}, nil
 }
 
+func toProductTrxResponse(d domain.TransactionsDetail) *responsedto.ProductTransactionResponse {
+	return &responsedto.ProductTransactionResponse{
+		ProductID:   d.ProductID,
+		ProductName: d.ProductName,
+		Price:       d.Price,
+		Qty:         d.Qty,
+		Subtotal:    d.Subtotal,
+	}
+}
+
 func (t *transactionUsecase) GetTransaction(ctx context.Context, dto *requestdto.GetTransactionRequest) (*responsedto.TransactionResponse, error) {
 	trxId, err := uuid.Parse(dto.ID)
 	if err != nil {
@@ -304,23 +344,13 @@ func (t *transactionUsecase) GetTransaction(ctx context.Context, dto *requestdto
 
 	result, err := t.trxRepo.GetTransactionByID(ctx, trxId)
 	if err != nil {
-		t.log.Error("failed to get transaction", zap.Error(err))
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("failed to get transaction: %w", domain.ErrInternal)
+		return nil, passOrInternal(t.log, err, "failed to get transaction", domain.ErrNotFound)
 	}
 
 	var transactionDetail []*responsedto.ProductTransactionResponse
 	var totalProfit int64
 	for _, d := range result.TransactionDetail {
-		transactionDetail = append(transactionDetail, &responsedto.ProductTransactionResponse{
-			ProductID:   d.ProductID,
-			ProductName: d.ProductName,
-			Price:       d.Price,
-			Qty:         d.Qty,
-			Subtotal:    d.Subtotal,
-		})
+		transactionDetail = append(transactionDetail, toProductTrxResponse(d))
 		totalProfit += int64(math.Round(float64(d.Price-d.PurchasePrice) * d.Qty))
 	}
 
@@ -330,6 +360,8 @@ func (t *transactionUsecase) GetTransaction(ctx context.Context, dto *requestdto
 		PaymentType:        int(result.PaymentType),
 		TotalTransaction:   result.TotalTransaction,
 		TotalProfit:        totalProfit,
+		StockConflict:      result.StockConflict,
+		ConflictReviewed:   result.ConflictReviewedAt != nil,
 		CreatedAt:          result.CreatedAt.Format(time.RFC3339),
 		TransactionDetails: transactionDetail,
 	}
@@ -358,17 +390,7 @@ func (t *transactionUsecase) PrintReportMonth(ctx context.Context, dto *requestd
 	}
 	user, err := t.userRepo.GetUserById(ctx, userId)
 	if err != nil {
-		t.log.Error("failed to get user", zap.Error(err))
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("failed to get user: %w", domain.ErrInternal)
-	}
-
-	report, err := t.trxRepo.GetMonthlyReport(ctx, month, year)
-	if err != nil {
-		t.log.Error("failed to get monthly report", zap.Error(err))
-		return nil, fmt.Errorf("failed to get monthly report: %w", domain.ErrInternal)
+		return nil, passOrInternal(t.log, err, "failed to get user", domain.ErrNotFound)
 	}
 
 	dailyReport, err := t.trxRepo.GetDailyReport(ctx, month, year)
@@ -377,16 +399,13 @@ func (t *transactionUsecase) PrintReportMonth(ctx context.Context, dto *requestd
 		return nil, fmt.Errorf("failed to get daily report: %w", domain.ErrInternal)
 	}
 
-	daily := make([]pdf.MonthReportDailyRow, 0, len(dailyReport))
-	for _, d := range dailyReport {
-		daily = append(daily, pdf.MonthReportDailyRow{
-			Date:             d.Date,
-			TotalTransaction: d.TotalTransaction,
-			Revenue:          d.TotalRevenue,
-			Debt:             d.TotalDebt,
-			Total:            d.GrandTotal,
-		})
+	debtFlow, err := t.trxRepo.GetDailyDebtFlow(ctx, month, year)
+	if err != nil {
+		t.log.Error("failed to get daily debt flow", zap.Error(err))
+		return nil, fmt.Errorf("failed to get daily debt flow: %w", domain.ErrInternal)
 	}
+
+	daily := mergeDailyReport(dailyReport, debtFlow)
 
 	productSold, err := t.trxRepo.GetMonthlyProductSold(ctx, month, year)
 	if err != nil {
@@ -424,18 +443,14 @@ func (t *transactionUsecase) PrintReportMonth(ctx context.Context, dto *requestd
 	}
 
 	urlPdf, err := pdf.GenerateMonthReport(pdf.MonthReportData{
-		StoreName:        t.storeName,
-		Cashier:          user.Username,
-		Month:            month,
-		Year:             year,
-		TotalTransaction: report.TotalTransaction,
-		TotalRevenue:     report.TotalRevenue,
-		TotalDebt:        report.TotalDebt,
-		GrandTotal:       report.GrandTotal,
-		Daily:            daily,
-		ProductsSold:     products,
-		DailyProducts:    dailyProducts,
-		GeneratedAt:      now,
+		StoreName:     t.storeName,
+		Cashier:       user.Username,
+		Month:         month,
+		Year:          year,
+		Daily:         daily,
+		ProductsSold:  products,
+		DailyProducts: dailyProducts,
+		GeneratedAt:   now,
 	})
 	if err != nil {
 		t.log.Error("failed to generate month report pdf", zap.Error(err))
@@ -448,6 +463,37 @@ func (t *transactionUsecase) PrintReportMonth(ctx context.Context, dto *requestd
 		Year:   strconv.Itoa(year),
 		UrlPdf: urlPdf,
 	}, nil
+}
+
+// mergeDailyReport menggabungkan penjualan harian dengan arus hutang harian
+// (manual + pembayaran); hari yang hanya punya pembayaran tetap muncul.
+func mergeDailyReport(sales []domain.DailyReport, flow []domain.DailyDebtFlow) []pdf.MonthReportDailyRow {
+	byDate := make(map[string]*pdf.MonthReportDailyRow, len(sales)+len(flow))
+	row := func(date time.Time) *pdf.MonthReportDailyRow {
+		key := date.Format(dateLayout)
+		if r, ok := byDate[key]; ok {
+			return r
+		}
+		r := &pdf.MonthReportDailyRow{Date: date}
+		byDate[key] = r
+		return r
+	}
+	for _, s := range sales {
+		r := row(s.Date)
+		r.CountSale, r.Revenue, r.Cost = s.CountSale, s.Revenue, s.Cost
+		r.CountDebt, r.DebtSales, r.DebtCost = s.CountDebt, s.DebtSales, s.DebtCost
+	}
+	for _, f := range flow {
+		r := row(f.Date)
+		r.DebtManual, r.DebtPaid = f.Manual, f.Paid
+	}
+
+	daily := make([]pdf.MonthReportDailyRow, 0, len(byDate))
+	for _, r := range byDate {
+		daily = append(daily, *r)
+	}
+	slices.SortFunc(daily, func(a, b pdf.MonthReportDailyRow) int { return a.Date.Compare(b.Date) })
+	return daily
 }
 
 func (t *transactionUsecase) PrintReportTransaction(ctx context.Context, dto *requestdto.PrintReportTransactionRequest) (*responsedto.PrintReportTransactionResponse, error) {
@@ -478,11 +524,7 @@ func (t *transactionUsecase) PrintReportTransaction(ctx context.Context, dto *re
 
 	trx, err := t.trxRepo.GetTransactionByID(ctx, trxId)
 	if err != nil {
-		t.log.Error("failed to get transaction", zap.Error(err))
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("failed to get transaction: %w", domain.ErrInternal)
+		return nil, passOrInternal(t.log, err, "failed to get transaction", domain.ErrNotFound)
 	}
 
 	items := make([]pdf.TransactionReportItem, 0, len(trx.TransactionDetail))

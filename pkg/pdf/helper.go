@@ -3,7 +3,6 @@ package pdf
 import (
 	"crypto/rand"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -64,14 +63,60 @@ func drawLine(pdf *fpdf.Fpdf) {
 	pdf.Line(x, y, 195, y)
 }
 
-func drawDailyHeader(pdf *fpdf.Fpdf) {
+// drawSummary menggambar tabel label-nilai; baris terakhir ditebalkan.
+func drawSummary(pdf *fpdf.Fpdf, title string, rows [][2]string) {
+	pdf.SetFont("Arial", "B", 12)
+	pdf.CellFormat(0, 8, title, "", 1, "L", false, 0, "")
+	pdf.Ln(1)
+	for i, row := range rows {
+		if i == len(rows)-1 {
+			pdf.SetFont("Arial", "B", 11)
+		} else {
+			pdf.SetFont("Arial", "", 11)
+		}
+		pdf.CellFormat(110, 8, row[0], "1", 0, "L", false, 0, "")
+		pdf.CellFormat(70, 8, row[1], "1", 1, "R", false, 0, "")
+	}
+}
+
+func drawSalesDailyHeader(pdf *fpdf.Fpdf) {
 	pdf.SetFont("Arial", "B", 9)
 	pdf.SetFillColor(230, 230, 230)
 	pdf.CellFormat(30, 8, "Tanggal", "1", 0, "L", true, 0, "")
-	pdf.CellFormat(25, 8, "Transaksi", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(20, 8, "Transaksi", "1", 0, "C", true, 0, "")
 	pdf.CellFormat(45, 8, "Pendapatan", "1", 0, "R", true, 0, "")
-	pdf.CellFormat(35, 8, "Hutang", "1", 0, "R", true, 0, "")
-	pdf.CellFormat(45, 8, "Total", "1", 1, "R", true, 0, "")
+	pdf.CellFormat(40, 8, "Harga Dasar", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(45, 8, "Pendapatan Bersih", "1", 1, "R", true, 0, "")
+}
+
+func drawSalesDailyRow(pdf *fpdf.Fpdf, label string, r MonthReportDailyRow, h float64) {
+	pdf.CellFormat(30, h, label, "1", 0, "L", false, 0, "")
+	pdf.CellFormat(20, h, strconv.FormatInt(r.CountSale, 10), "1", 0, "C", false, 0, "")
+	pdf.CellFormat(45, h, FormatRupiah(r.Revenue), "1", 0, "R", false, 0, "")
+	pdf.CellFormat(40, h, FormatRupiah(r.Cost), "1", 0, "R", false, 0, "")
+	pdf.CellFormat(45, h, FormatRupiah(r.Revenue-r.Cost), "1", 1, "R", false, 0, "")
+}
+
+func drawDebtDailyHeader(pdf *fpdf.Fpdf) {
+	pdf.SetFont("Arial", "B", 8)
+	pdf.SetFillColor(230, 230, 230)
+	pdf.CellFormat(26, 8, "Tanggal", "1", 0, "L", true, 0, "")
+	pdf.CellFormat(14, 8, "Trx", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(28, 8, "Hutang Baru", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(27, 8, "Manual", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(28, 8, "Dibayar", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(28, 8, "Harga Dasar", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(29, 8, "Pend. Bersih", "1", 1, "R", true, 0, "")
+}
+
+func drawDebtDailyRow(pdf *fpdf.Fpdf, label string, r MonthReportDailyRow, h float64) {
+	pdf.CellFormat(26, h, label, "1", 0, "L", false, 0, "")
+	pdf.CellFormat(14, h, strconv.FormatInt(r.CountDebt, 10), "1", 0, "C", false, 0, "")
+	pdf.CellFormat(28, h, FormatRupiah(r.DebtSales), "1", 0, "R", false, 0, "")
+	pdf.CellFormat(27, h, FormatRupiah(r.DebtManual), "1", 0, "R", false, 0, "")
+	pdf.CellFormat(28, h, FormatRupiah(r.DebtPaid), "1", 0, "R", false, 0, "")
+	pdf.CellFormat(28, h, FormatRupiah(r.DebtCost), "1", 0, "R", false, 0, "")
+	pdf.CellFormat(29, h, FormatRupiah(r.DebtSales-r.DebtCost), "1", 1, "R", false, 0, "")
 }
 
 func FormatRupiah(v int64) string {
@@ -97,10 +142,7 @@ func FormatRupiah(v int64) string {
 }
 
 func formatQty(v float64) string {
-	if v == math.Trunc(v) {
-		return strconv.FormatInt(int64(v), 10)
-	}
-	return strconv.FormatFloat(v, 'f', 2, 64)
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func formatDateTime(t time.Time) string {
@@ -132,15 +174,9 @@ func formatDateOnly(t time.Time) string {
 }
 
 func truncate(s string, max int) string {
-	if max <= 0 {
-		return ""
-	}
 	r := []rune(s)
 	if len(r) <= max {
 		return s
-	}
-	if max <= 3 {
-		return string(r[:max])
 	}
 	return string(r[:max-3]) + "..."
 }

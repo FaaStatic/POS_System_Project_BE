@@ -19,6 +19,10 @@ func likeContains(s string) string {
 	return "%" + likeEscaper.Replace(s) + "%"
 }
 
+// unscoped dipakai di Preload supaya relasi yang sudah dinonaktifkan (soft
+// delete) tetap terbaca di riwayat, mis. nama customer pada hutang lama.
+func unscoped(db *gorm.DB) *gorm.DB { return db.Unscoped() }
+
 func pageParams(limit int, order string) (int, string) {
 	if limit <= 0 || limit > 100 {
 		limit = 10
@@ -29,6 +33,9 @@ func pageParams(limit int, order string) (int, string) {
 	return limit, "DESC"
 }
 
+// security: Sprintf di sini aman: prefix selalu konstanta pemanggil ("" atau
+// "debts.") dan order sudah disaring pageParams menjadi ASC/DESC. Nilai cursor
+// tetap lewat placeholder. Jangan teruskan input user ke prefix/order.
 func keysetPage(q *gorm.DB, prefix string, limit int, order string, cursor *paginated.CursorMeta) *gorm.DB {
 	if cursor != nil {
 		op := "<"

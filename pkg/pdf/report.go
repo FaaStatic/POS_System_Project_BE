@@ -11,26 +11,43 @@ var reportDir = "storage/reports"
 const urlPrefix = "/api/reports"
 
 type MonthReportData struct {
-	StoreName        string
-	Cashier          string
-	Month            int
-	Year             int
-	TotalTransaction int64
-	TotalRevenue     int64
-	TotalDebt        int64
-	GrandTotal       int64
-	Daily            []MonthReportDailyRow
-	ProductsSold     []MonthReportProductRow
-	DailyProducts    []MonthReportDailyProducts
-	GeneratedAt      time.Time
+	StoreName     string
+	Cashier       string
+	Month         int
+	Year          int
+	Daily         []MonthReportDailyRow
+	ProductsSold  []MonthReportProductRow
+	DailyProducts []MonthReportDailyProducts
+	GeneratedAt   time.Time
 }
 
+// MonthReportDailyRow: Cost/DebtCost = total harga dasar (pengeluaran) barang
+// terjual. DebtPaid hanya mengurangi saldo hutang, tidak terikat barang.
 type MonthReportDailyRow struct {
-	Date             time.Time
-	TotalTransaction int64
-	Revenue          int64
-	Debt             int64
-	Total            int64
+	Date       time.Time
+	CountSale  int64
+	Revenue    int64
+	Cost       int64
+	CountDebt  int64
+	DebtSales  int64
+	DebtManual int64
+	DebtPaid   int64
+	DebtCost   int64
+}
+
+func sumDaily(rows []MonthReportDailyRow) MonthReportDailyRow {
+	var total MonthReportDailyRow
+	for _, r := range rows {
+		total.CountSale += r.CountSale
+		total.Revenue += r.Revenue
+		total.Cost += r.Cost
+		total.CountDebt += r.CountDebt
+		total.DebtSales += r.DebtSales
+		total.DebtManual += r.DebtManual
+		total.DebtPaid += r.DebtPaid
+		total.DebtCost += r.DebtCost
+	}
+	return total
 }
 
 type MonthReportProductRow struct {
@@ -89,33 +106,31 @@ func GenerateMonthReport(data MonthReportData) (string, error) {
 	pdf.CellFormat(0, 6, "Dicetak pada : "+formatDateTime(data.GeneratedAt), "", 1, "L", false, 0, "")
 	pdf.Ln(4)
 
-	pdf.SetFont("Arial", "B", 12)
-	pdf.CellFormat(0, 8, "Ringkasan", "", 1, "L", false, 0, "")
-	pdf.Ln(1)
+	total := sumDaily(data.Daily)
 
-	rows := [][2]string{
-		{"Jumlah Transaksi", strconv.FormatInt(data.TotalTransaction, 10) + " transaksi"},
-		{"Total Pendapatan (Lunas)", FormatRupiah(data.TotalRevenue)},
-		{"Total Hutang (Belum Lunas)", FormatRupiah(data.TotalDebt)},
-		{"Total Nilai Transaksi", FormatRupiah(data.GrandTotal)},
-	}
-	for i, row := range rows {
-		if i == len(rows)-1 {
-			pdf.SetFont("Arial", "B", 11)
-		} else {
-			pdf.SetFont("Arial", "", 11)
-		}
-		pdf.CellFormat(110, 8, row[0], "1", 0, "L", false, 0, "")
-		pdf.CellFormat(70, 8, row[1], "1", 1, "R", false, 0, "")
-	}
+	drawSummary(pdf, "Ringkasan Penjualan Non-Hutang", [][2]string{
+		{"Jumlah Transaksi", strconv.FormatInt(total.CountSale, 10) + " transaksi"},
+		{"Total Pendapatan", FormatRupiah(total.Revenue)},
+		{"Total Harga Dasar (Pengeluaran)", FormatRupiah(total.Cost)},
+		{"Pendapatan Bersih", FormatRupiah(total.Revenue - total.Cost)},
+	})
+	pdf.Ln(6)
+	drawSummary(pdf, "Ringkasan Hutang", [][2]string{
+		{"Jumlah Transaksi Hutang", strconv.FormatInt(total.CountDebt, 10) + " transaksi"},
+		{"Hutang Baru (Transaksi)", FormatRupiah(total.DebtSales)},
+		{"Hutang Baru (Manual)", FormatRupiah(total.DebtManual)},
+		{"Hutang Dibayar", FormatRupiah(total.DebtPaid)},
+		{"Total Harga Dasar Hutang (Pengeluaran)", FormatRupiah(total.DebtCost)},
+		{"Pendapatan Bersih Hutang", FormatRupiah(total.DebtSales - total.DebtCost)},
+	})
 
 	pdf.Ln(8)
 
 	pdf.SetFont("Arial", "B", 12)
-	pdf.CellFormat(0, 8, "Rincian Harian", "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 8, "Rincian Harian Non-Hutang", "", 1, "L", false, 0, "")
 	pdf.Ln(1)
 
-	drawDailyHeader(pdf)
+	drawSalesDailyHeader(pdf)
 	if len(data.Daily) == 0 {
 		pdf.SetFont("Arial", "I", 10)
 		pdf.CellFormat(180, 8, "Tidak ada transaksi pada bulan ini.", "1", 1, "C", false, 0, "")
@@ -124,21 +139,37 @@ func GenerateMonthReport(data MonthReportData) (string, error) {
 		for _, d := range data.Daily {
 			if pdf.GetY() > 270 {
 				pdf.AddPage()
-				drawDailyHeader(pdf)
+				drawSalesDailyHeader(pdf)
 				pdf.SetFont("Arial", "", 9)
 			}
-			pdf.CellFormat(30, 7, formatDateOnly(d.Date), "1", 0, "L", false, 0, "")
-			pdf.CellFormat(25, 7, strconv.FormatInt(d.TotalTransaction, 10), "1", 0, "C", false, 0, "")
-			pdf.CellFormat(45, 7, FormatRupiah(d.Revenue), "1", 0, "R", false, 0, "")
-			pdf.CellFormat(35, 7, FormatRupiah(d.Debt), "1", 0, "R", false, 0, "")
-			pdf.CellFormat(45, 7, FormatRupiah(d.Total), "1", 1, "R", false, 0, "")
+			drawSalesDailyRow(pdf, formatDateOnly(d.Date), d, 7)
 		}
 		pdf.SetFont("Arial", "B", 9)
-		pdf.CellFormat(30, 8, "TOTAL", "1", 0, "L", false, 0, "")
-		pdf.CellFormat(25, 8, strconv.FormatInt(data.TotalTransaction, 10), "1", 0, "C", false, 0, "")
-		pdf.CellFormat(45, 8, FormatRupiah(data.TotalRevenue), "1", 0, "R", false, 0, "")
-		pdf.CellFormat(35, 8, FormatRupiah(data.TotalDebt), "1", 0, "R", false, 0, "")
-		pdf.CellFormat(45, 8, FormatRupiah(data.GrandTotal), "1", 1, "R", false, 0, "")
+		drawSalesDailyRow(pdf, "TOTAL", total, 8)
+	}
+
+	pdf.Ln(8)
+
+	pdf.SetFont("Arial", "B", 12)
+	pdf.CellFormat(0, 8, "Rincian Harian Hutang", "", 1, "L", false, 0, "")
+	pdf.Ln(1)
+
+	drawDebtDailyHeader(pdf)
+	if len(data.Daily) == 0 {
+		pdf.SetFont("Arial", "I", 10)
+		pdf.CellFormat(180, 8, "Tidak ada hutang pada bulan ini.", "1", 1, "C", false, 0, "")
+	} else {
+		pdf.SetFont("Arial", "", 8)
+		for _, d := range data.Daily {
+			if pdf.GetY() > 270 {
+				pdf.AddPage()
+				drawDebtDailyHeader(pdf)
+				pdf.SetFont("Arial", "", 8)
+			}
+			drawDebtDailyRow(pdf, formatDateOnly(d.Date), d, 7)
+		}
+		pdf.SetFont("Arial", "B", 8)
+		drawDebtDailyRow(pdf, "TOTAL", total, 8)
 	}
 
 	pdf.Ln(8)
@@ -168,7 +199,7 @@ func GenerateMonthReport(data MonthReportData) (string, error) {
 		pdf.SetFont("Arial", "B", 9)
 		pdf.CellFormat(100, 8, "TOTAL", "1", 0, "L", false, 0, "")
 		pdf.CellFormat(35, 8, formatQty(totalQty), "1", 0, "C", false, 0, "")
-		pdf.CellFormat(45, 8, FormatRupiah(data.TotalRevenue+data.TotalDebt), "1", 1, "R", false, 0, "")
+		pdf.CellFormat(45, 8, FormatRupiah(total.Revenue+total.DebtSales), "1", 1, "R", false, 0, "")
 	}
 
 	pdf.Ln(8)

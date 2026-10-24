@@ -29,6 +29,8 @@ type AppConfig struct {
 	Host           string
 	TrustedProxies []string
 	Prefork        bool
+	// CMSOrigins: origin CMS web yang boleh memanggil API dengan cookie refresh.
+	CMSOrigins []string
 }
 
 type DBConfig struct {
@@ -104,6 +106,7 @@ func InitEnvConfig(log *zap.Logger) (*Config, error) {
 			Host:           viper.GetString("server.host"),
 			TrustedProxies: viper.GetStringSlice("server.trusted_proxies"),
 			Prefork:        viper.GetBool("server.prefork"),
+			CMSOrigins:     viper.GetStringSlice("server.cms_origins"),
 		},
 		DB: DBConfig{
 			Host:                   viper.GetString("database.host"),

@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"errors"
+	"shop_project_be/internal/constant/paginated"
 	requestdto "shop_project_be/internal/dto/request_dto"
 	responsedto "shop_project_be/internal/dto/response_dto"
 	"time"
@@ -31,14 +32,14 @@ type PaymentItem struct {
 
 type Payment struct {
 	ID             uuid.UUID     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	OrderID        string        `gorm:"type:varchar(50);uniqueIndex;not null" json:"order_id"`
-	UserID         uuid.UUID     `gorm:"type:uuid;not null" json:"user_id"`
+	OrderID        string        `gorm:"type:varchar(50)" json:"order_id"`
+	UserID         uuid.UUID     `gorm:"type:uuid" json:"user_id"`
 	CustomerID     *uuid.UUID    `gorm:"type:uuid" json:"customer_id,omitempty"`
-	Method         string        `gorm:"type:varchar(20);not null" json:"method"`
-	SubtotalAmount int64         `gorm:"type:bigint;not null;default:0" json:"subtotal_amount"`
-	FeeAmount      int64         `gorm:"type:bigint;not null;default:0" json:"fee_amount"`
-	GrossAmount    int64         `gorm:"type:bigint;not null" json:"gross_amount"`
-	Status         PaymentStatus `gorm:"type:varchar(20);not null;default:'pending'" json:"status"`
+	Method         string        `gorm:"type:varchar(20)" json:"method"`
+	SubtotalAmount int64         `gorm:"type:bigint;default:0" json:"subtotal_amount"`
+	FeeAmount      int64         `gorm:"type:bigint;default:0" json:"fee_amount"`
+	GrossAmount    int64         `gorm:"type:bigint" json:"gross_amount"`
+	Status         PaymentStatus `gorm:"type:varchar(20);default:'pending'" json:"status"`
 
 	MidtransTrxID  string `gorm:"column:midtrans_trx_id;type:varchar(100)" json:"midtrans_transaction_id"`
 	MidtransStatus string `gorm:"column:midtrans_status;type:varchar(30)" json:"midtrans_status"`
@@ -57,11 +58,11 @@ type Payment struct {
 	PaidAt        *time.Time    `json:"paid_at,omitempty"`
 	TransactionID *uuid.UUID    `gorm:"type:uuid" json:"transaction_id,omitempty"`
 
-	StockReserved bool `gorm:"column:stock_reserved;not null;default:false" json:"stock_reserved"`
+	StockReserved bool `gorm:"column:stock_reserved;default:false" json:"stock_reserved"`
 
 	CreatedAt time.Time      `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt time.Time      `gorm:"autoUpdateTime" json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	DeletedAt gorm.DeletedAt `json:"-"`
 }
 
 func (p *Payment) TableName() string {
@@ -106,6 +107,24 @@ type PaymentRepository interface {
 	ListStalePending(ctx context.Context, limit int) ([]*Payment, error)
 	ListPendingFinalization(ctx context.Context, limit int) ([]*Payment, error)
 	Touch(ctx context.Context, orderID string) error
+	ListPayments(ctx context.Context, filter FilterPayment) (*PaymentsPage, error)
+}
+
+type FilterPayment struct {
+	Status    string
+	Method    string
+	DateFrom  *time.Time
+	DateUntil *time.Time
+	Cursor    *paginated.CursorMeta
+	Limit     int
+	Order     string
+}
+
+type PaymentsPage struct {
+	AfterId   string     `json:"after_id"`
+	AfterTime string     `json:"after_time"`
+	HasNext   bool       `json:"has_next"`
+	Payments  []*Payment `json:"payments"`
 }
 
 type PaymentUsecase interface {
@@ -114,4 +133,5 @@ type PaymentUsecase interface {
 	HandleNotification(ctx context.Context, notif *requestdto.MidtransNotificationRequest) error
 	GetStatus(ctx context.Context, orderID, requesterID, requesterRole string) (*responsedto.PaymentStatusResponse, error)
 	ReconcileStalePayments(ctx context.Context) error
+	ListPayments(ctx context.Context, request *requestdto.ListPaymentsRequest) (*PaymentsPage, error)
 }

@@ -1,12 +1,13 @@
 package responsedto
 
 type DebtResponseDto struct {
-	CustomerID      string                `json:"customer_id"`
-	NameCustomer    string                `json:"name_customer"`
-	TotalDebt       int64                 `json:"total_debt"`
-	RemainingDebt   int64                 `json:"remaining_debt"`
-	DateDebt        *string               `json:"date_debt"`
-	TransactionList []TransactionResponse `json:"transaction_list"`
+	DebtID        string  `json:"debt_id"`
+	Status        string  `json:"status"`
+	CustomerID    string  `json:"customer_id"`
+	NameCustomer  string  `json:"name_customer"`
+	TotalDebt     int64   `json:"total_debt"`
+	RemainingDebt int64   `json:"remaining_debt"`
+	DateDebt      *string `json:"date_debt"`
 }
 
 type DebtListResponseDto struct {

@@ -21,17 +21,23 @@ func NewDebtRepository(db *gorm.DB) domain.DebtRepository {
 	return &debtRepository{db: db}
 }
 
+// GetDebtByID tidak preload Transactions: satu hutang berjalan menampung
+// transaksi tanpa batas. Ambil lewat GET /api/customers/:id/transactions.
 func (d *debtRepository) GetDebtByID(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
-	return d.getDebt(ctx, id, "Transactions")
+	return d.getDebt(ctx, id)
 }
 
 func (d *debtRepository) GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
 	return d.getDebt(ctx, id, "DebtPayments.User")
 }
 
-func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, preload string) (*domain.Debts, error) {
+func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, preloads ...string) (*domain.Debts, error) {
 	var debt domain.Debts
-	result := d.db.WithContext(ctx).Preload("Customer").Preload(preload).Where("id = ?", id).First(&debt)
+	query := d.db.WithContext(ctx).Preload("Customer", unscoped)
+	for _, p := range preloads {
+		query = query.Preload(p)
+	}
+	result := query.Where("id = ?", id).First(&debt)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, domain.NotFound(fmt.Sprintf("debt with id %s not found", id))
@@ -41,7 +47,7 @@ func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, preload stri
 	return &debt, nil
 }
 
-func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts) error {
+func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID) error {
 	return runTxDB(ctx, d.db, func(tx *gorm.DB) error {
 		if err := lockCustomerShared(tx, debt.CustomerID); err != nil {
 			return err
@@ -50,11 +56,13 @@ func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts) error 
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("customer_id = ? AND status = ?", debt.CustomerID, enum.BELUM_LUNAS).
 			First(&open).Error
+		debtID := open.ID
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			if err := tx.Create(debt).Error; err != nil {
 				return internalErr(fmt.Errorf("failed to add debt: %w", err))
 			}
+			debtID = debt.ID
 		case err != nil:
 			return internalErr(fmt.Errorf("failed to get debt: %w", err))
 		default:
@@ -70,46 +78,12 @@ func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts) error 
 				return internalErr(fmt.Errorf("failed to update debt: %w", err))
 			}
 		}
-		return nil
-	})
-}
-
-func (d *debtRepository) DeleteDebt(ctx context.Context, id uuid.UUID) error {
-	return runTxDB(ctx, d.db, func(tx *gorm.DB) error {
-		var debt domain.Debts
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", id).First(&debt).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return domain.NotFound(fmt.Sprintf("debt with id %s not found", id))
-			}
-			return internalErr(fmt.Errorf("failed to lock debt: %w", err))
-		}
-		if err := assertDebtDeletable(tx, &debt); err != nil {
-			return err
-		}
-		if err := tx.Where("id = ?", id).Delete(&domain.Debts{}).Error; err != nil {
-			return internalErr(fmt.Errorf("failed to delete debt: %w", err))
+		adjustment := &domain.DebtAdjustments{DebtID: debtID, UserID: userID, Amount: debt.TotalDebt}
+		if err := tx.Create(adjustment).Error; err != nil {
+			return internalErr(fmt.Errorf("failed to record debt adjustment: %w", err))
 		}
 		return nil
 	})
-}
-
-func assertDebtDeletable(tx *gorm.DB, debt *domain.Debts) error {
-	if debt.RemainingDebt > 0 {
-		return domain.Conflict(fmt.Sprintf(
-			"debt %s cannot be deleted: %d still owed; settle it or void it first",
-			debt.ID, debt.RemainingDebt))
-	}
-	paidInstalments, err := countDebtPayments(tx, debt.ID)
-	if err != nil {
-		return err
-	}
-	if paidInstalments > 0 {
-		return domain.Conflict(fmt.Sprintf(
-			"debt %s cannot be deleted: it has %d recorded payment(s); void them first",
-			debt.ID, paidInstalments))
-	}
-	return nil
 }
 
 func countDebtPayments(tx *gorm.DB, debtID uuid.UUID) (int64, error) {
@@ -173,8 +147,7 @@ func (d *debtRepository) PayDebt(ctx context.Context, debtID uuid.UUID, payment 
 
 		newRemaining := debt.RemainingDebt - payment.NominalBayar
 		status := enum.BELUM_LUNAS
-		if newRemaining <= 0 {
-			newRemaining = 0
+		if newRemaining == 0 {
 			status = enum.LUNAS
 		}
 		if err := tx.Model(&domain.Debts{}).Where("id = ?", debt.ID).
@@ -213,11 +186,11 @@ func (d *debtRepository) GetAllDebt(ctx context.Context, filter domain.FilterDeb
 	// Transaksi tidak di-preload: satu hutang terbuka terus menampung transaksi
 	// hutang customer, jadi jumlahnya tak terbatas. Ambil per customer lewat
 	// GET /api/customers/:id/transactions (berhalaman).
-	query := d.db.WithContext(ctx).Preload("Customer").Model(&domain.Debts{})
+	query := d.db.WithContext(ctx).Preload("Customer", unscoped).Model(&domain.Debts{})
 
 	if filter.Search != "" {
 		query = query.Select("debts.*").
-			Joins("JOIN customers ON customers.id = debts.customer_id AND customers.deleted_at IS NULL").
+			Joins("JOIN customers ON customers.id = debts.customer_id").
 			Where("customers.name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
 	}
 

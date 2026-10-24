@@ -17,24 +17,16 @@ import (
 var (
 	createAdminUsername string
 	createAdminPassword string
-	createAdminRole     string
 )
 
 var createAdmin = &cobra.Command{
 	Use:   "create-admin",
-	Short: "Create an admin or superadmin account directly in the database",
+	Short: "Create a superadmin account directly in the database",
 	Run: func(cmd *cobra.Command, args []string) {
 		env := os.Getenv("APP_ENV")
 		loggerconfig.LoggerCustom(env)
 		defer loggerconfig.Logger.Sync()
 
-		if createAdminRole != "superadmin" {
-			loggerconfig.Logger.Fatal("role must be 'superadmin'", zap.String("role", createAdminRole))
-		}
-		roleEnum, err := enum.ParseUserRole(createAdminRole)
-		if err != nil {
-			loggerconfig.Logger.Fatal("invalid role", zap.Error(err))
-		}
 		if len(createAdminPassword) < 6 {
 			loggerconfig.Logger.Fatal("password minimal 6 karakter")
 		}
@@ -63,7 +55,7 @@ var createAdmin = &cobra.Command{
 		user := &domain.Users{
 			Username: createAdminUsername,
 			Password: createAdminPassword,
-			Role:     roleEnum,
+			Role:     enum.Superadmin,
 		}
 		if err := user.HashPswd(); err != nil {
 			loggerconfig.Logger.Fatal("failed to hash password", zap.Error(err))
@@ -74,7 +66,7 @@ var createAdmin = &cobra.Command{
 
 		loggerconfig.Logger.Info("account created successfully",
 			zap.String("username", createAdminUsername),
-			zap.String("role", roleEnum.String()),
+			zap.String("role", enum.Superadmin.String()),
 		)
 	},
 }
@@ -82,7 +74,6 @@ var createAdmin = &cobra.Command{
 func init() {
 	createAdmin.Flags().StringVarP(&createAdminUsername, "username", "u", "", "account username (required)")
 	createAdmin.Flags().StringVarP(&createAdminPassword, "password", "p", "", "account password, minimum 6 characters (required)")
-	createAdmin.Flags().StringVarP(&createAdminRole, "role", "r", "superadmin", "account role (superadmin only)")
 	createAdmin.MarkFlagRequired("username")
 	createAdmin.MarkFlagRequired("password")
 	rootCmd.AddCommand(createAdmin)
