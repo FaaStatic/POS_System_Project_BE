@@ -13,6 +13,7 @@ import (
 type ProductRow struct {
 	Line             int
 	SKU              string
+	Barcode          string
 	ProductName      string
 	Unit             string
 	PurchasePrice    float64
@@ -146,6 +147,7 @@ func parseRecords(records [][]string, err error) ([]ProductRow, []RowError, erro
 		row := ProductRow{
 			Line:        line,
 			SKU:         get("sku"),
+			Barcode:     get("barcode"),
 			ProductName: get("product_name"),
 			Unit:        get("unit"),
 			Category:    get("category"),

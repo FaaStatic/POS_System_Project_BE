@@ -44,7 +44,7 @@ func (p *productRepository) UpsertBulkProduct(ctx context.Context, products []*d
 	})
 
 	updates := append(clause.AssignmentColumns([]string{
-		"product_name", "unit", "product_type", "purchase_price", "selling_price",
+		"product_name", "barcode", "unit", "product_type", "purchase_price", "selling_price",
 		"selling_price_debt", "category_id", "image", "updated_at",
 	}), clause.Assignment{Column: clause.Column{Name: "stock"}, Value: gorm.Expr("products.stock + EXCLUDED.stock")})
 
@@ -63,18 +63,27 @@ func (p *productRepository) UpsertBulkProduct(ctx context.Context, products []*d
 }
 
 func (p *productRepository) GetProductsBySKUs(ctx context.Context, skus []string) (map[string]*domain.Products, error) {
-	bySKU := make(map[string]*domain.Products, len(skus))
-	if len(skus) == 0 {
-		return bySKU, nil
+	return p.productsBy(ctx, "sku", skus, func(row *domain.Products) string { return row.SKU })
+}
+
+func (p *productRepository) GetProductsByBarcodes(ctx context.Context, barcodes []string) (map[string]*domain.Products, error) {
+	return p.productsBy(ctx, "barcode", barcodes, func(row *domain.Products) string { return *row.Barcode })
+}
+
+// productsBy: column selalu konstanta dari pemanggil di atas, bukan input user.
+func (p *productRepository) productsBy(ctx context.Context, column string, values []string, key func(*domain.Products) string) (map[string]*domain.Products, error) {
+	byKey := make(map[string]*domain.Products, len(values))
+	if len(values) == 0 {
+		return byKey, nil
 	}
 	var rows []*domain.Products
-	if err := p.db.WithContext(ctx).Where("sku IN ?", skus).Find(&rows).Error; err != nil {
-		return nil, internalErr(fmt.Errorf("failed to get products by sku: %w", err))
+	if err := p.db.WithContext(ctx).Where(column+" IN ?", values).Find(&rows).Error; err != nil {
+		return nil, internalErr(fmt.Errorf("failed to get products by %s: %w", column, err))
 	}
 	for _, row := range rows {
-		bySKU[row.SKU] = row
+		byKey[key(row)] = row
 	}
-	return bySKU, nil
+	return byKey, nil
 }
 
 // GetCategoryIDs memetakan nama kategori ke id, dengan kunci domain.CategoryKey.
@@ -185,7 +194,7 @@ func (p *productRepository) DeleteCategory(ctx context.Context, id uuid.UUID) er
 func (p *productRepository) AddProduct(ctx context.Context, product *domain.Products) error {
 	if err := p.db.WithContext(ctx).Create(product).Error; err != nil {
 		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			return domain.Duplicate(fmt.Sprintf("product with sku %s already exists", product.SKU))
+			return domain.Duplicate(fmt.Sprintf("product with sku %s or the same barcode already exists", product.SKU))
 		}
 		return internalErr(fmt.Errorf("failed to add product: %w", err))
 	}
@@ -213,6 +222,9 @@ func (p *productRepository) GetAllProduct(ctx context.Context, filter domain.Fil
 
 	if filter.Search != "" {
 		query = query.Where("product_name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
+	}
+	if filter.Barcode != "" {
+		query = query.Where("barcode = ?", filter.Barcode)
 	}
 
 	var items []*domain.Products
@@ -281,7 +293,7 @@ func (p *productRepository) UpdateProductWithLock(ctx context.Context, id uuid.U
 
 		if err := tx.Model(&domain.Products{}).Where("id = ?", id).Updates(fields).Error; err != nil {
 			if errors.Is(err, gorm.ErrDuplicatedKey) {
-				return domain.Duplicate(fmt.Sprintf("product with sku %v already exists", fields["sku"]))
+				return domain.Duplicate("another product already uses this sku or barcode")
 			}
 			return internalErr(fmt.Errorf("failed to update product: %w", err))
 		}

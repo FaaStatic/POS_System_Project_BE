@@ -16,6 +16,7 @@ import (
 type Products struct {
 	ID               uuid.UUID        `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
 	SKU              string           `gorm:"type:varchar(50)" json:"sku"`
+	Barcode          *string          `gorm:"type:varchar(64)" json:"barcode"`
 	ProductName      string           `gorm:"type:varchar(255)" json:"product_name"`
 	Unit             enum.ProductUnit `gorm:"type:smallint" json:"unit"`
 	ProductType      enum.ProductType `gorm:"column:product_type;type:smallint;default:0" json:"product_type"`
@@ -66,6 +67,8 @@ type FilterAllProduct struct {
 	Limit      int
 	CategoryID *uuid.UUID
 	Order      string
+	// Barcode: exact match untuk hasil scan kasir.
+	Barcode string
 }
 
 type PaginatedItem struct {
@@ -81,6 +84,7 @@ type ProductRepository interface {
 	GetProduct(ctx context.Context, id uuid.UUID) (*Products, error)
 	GetProductsByIDs(ctx context.Context, ids []uuid.UUID, includeDeleted bool) (map[uuid.UUID]*Products, error)
 	GetProductsBySKUs(ctx context.Context, skus []string) (map[string]*Products, error)
+	GetProductsByBarcodes(ctx context.Context, barcodes []string) (map[string]*Products, error)
 	GetAllProduct(ctx context.Context, filter FilterAllProduct) (*PaginatedItem, error)
 	UpdateProductWithLock(ctx context.Context, id uuid.UUID, fields map[string]interface{}, stockDelta float64) error
 	GetCategoryIDs(ctx context.Context, names []string, create bool) (map[string]uuid.UUID, error)

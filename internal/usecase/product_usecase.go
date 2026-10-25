@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
 	requestdto "shop_project_be/internal/dto/request_dto"
@@ -42,6 +43,22 @@ func validatePrices(purchase, selling, sellingDebt int64) error {
 	return nil
 }
 
+var barcodePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+// normalizeBarcode: string kosong berarti produk tanpa barcode (NULL). Tanpa cek
+// checksum EAN/UPC karena toko juga memakai barcode buatan sendiri. Format sama
+// dengan chk_products_barcode_format (migrasi 00008).
+func normalizeBarcode(raw string) (*string, error) {
+	code := strings.TrimSpace(raw)
+	if code == "" {
+		return nil, nil
+	}
+	if !barcodePattern.MatchString(code) {
+		return nil, domain.Validation("barcode must be 1-64 characters of letters, digits, '.', '_' or '-'")
+	}
+	return &code, nil
+}
+
 func toProductResponse(item *domain.Products) responsedto.ProductDtoResponse {
 	var category string
 	if item.Category != nil {
@@ -50,6 +67,7 @@ func toProductResponse(item *domain.Products) responsedto.ProductDtoResponse {
 	return responsedto.ProductDtoResponse{
 		ID:               item.ID,
 		SKU:              item.SKU,
+		Barcode:          item.Barcode,
 		ProductName:      item.ProductName,
 		Unit:             int(item.Unit),
 		ProductType:      int(item.ProductType),
@@ -149,6 +167,21 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 		return nil, fmt.Errorf("failed to import products: %w", domain.ErrInternal)
 	}
 
+	// Barcode yang sudah dipakai SKU lain ditolak per baris; tanpa cek ini satu
+	// baris bentrok membuat seluruh upsert gagal di idx_products_barcode.
+	var barcodes []string
+	for _, row := range unique {
+		if code, err := normalizeBarcode(row.Barcode); err == nil && code != nil {
+			barcodes = append(barcodes, *code)
+		}
+	}
+	barcodeOwners, err := p.productRepo.GetProductsByBarcodes(ctx, barcodes)
+	if err != nil {
+		p.log.Error("failed to get products by barcode", zap.Error(err))
+		return nil, fmt.Errorf("failed to import products: %w", domain.ErrInternal)
+	}
+	barcodeRows := make(map[string]int, len(barcodes))
+
 	products := make([]*domain.Products, 0, len(unique))
 	categories := make([]string, 0, len(unique))
 	for _, row := range unique {
@@ -177,6 +210,27 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 			continue
 		}
 
+		barcode, err := normalizeBarcode(row.Barcode)
+		if err != nil {
+			rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: err.Error()})
+			continue
+		}
+		barcodeFromFile := barcode != nil
+		if barcode == nil && current != nil {
+			// Sel kosong mempertahankan barcode lama, supaya file tanpa kolom
+			// barcode tidak menghapus barcode yang sudah terdaftar.
+			barcode = current.Barcode
+		} else if barcodeFromFile {
+			if owner := barcodeOwners[*barcode]; owner != nil && owner.SKU != row.SKU {
+				rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: fmt.Sprintf("barcode %s is already used by sku %s", *barcode, owner.SKU)})
+				continue
+			}
+			if line, dup := barcodeRows[*barcode]; dup {
+				rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: fmt.Sprintf("barcode %s is also used on line %d", *barcode, line)})
+				continue
+			}
+		}
+
 		purchase := int64(math.Round(row.PurchasePrice))
 		selling := int64(math.Round(row.SellingPrice))
 		sellingDebt := int64(math.Round(row.SellingPriceDebt))
@@ -184,8 +238,14 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 			rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: err.Error()})
 			continue
 		}
+		// Dicatat setelah semua validasi: baris yang ditolak tidak boleh
+		// mengunci barcode untuk baris berikutnya.
+		if barcodeFromFile {
+			barcodeRows[*barcode] = row.Line
+		}
 		products = append(products, &domain.Products{
 			SKU:              row.SKU,
+			Barcode:          barcode,
 			ProductName:      row.ProductName,
 			Unit:             unit,
 			ProductType:      productType,
@@ -240,12 +300,17 @@ func (p *productUsecase) AddProductShopWithLock(ctx context.Context, request *re
 	if err := validatePrices(*request.PurchasePrice, *request.SellingPrice, *request.SellingPriceDebt); err != nil {
 		return err
 	}
+	barcode, err := normalizeBarcode(request.Barcode)
+	if err != nil {
+		return err
+	}
 	categoryID, err := p.categoryID(ctx, request.Category, true)
 	if err != nil {
 		return err
 	}
 	err = p.productRepo.AddProduct(ctx, &domain.Products{
 		SKU:              request.SKU,
+		Barcode:          barcode,
 		ProductName:      request.ProductName,
 		Unit:             enum.ProductUnit(request.Unit),
 		ProductType:      enum.ProductType(request.ProductType),
@@ -286,10 +351,11 @@ func (p *productUsecase) GetAllProductShop(ctx context.Context, request *request
 	}
 
 	filter := domain.FilterAllProduct{
-		Search: request.Search,
-		Cursor: cursor,
-		Limit:  request.Limit,
-		Order:  request.Order,
+		Search:  request.Search,
+		Barcode: strings.TrimSpace(request.Barcode),
+		Cursor:  cursor,
+		Limit:   request.Limit,
+		Order:   request.Order,
 	}
 	if request.CategoryID != "" {
 		id, err := uuid.Parse(request.CategoryID)
@@ -332,6 +398,17 @@ func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request 
 	fields := make(map[string]interface{})
 	if request.SKU != nil {
 		fields["sku"] = *request.SKU
+	}
+	if request.Barcode != nil {
+		barcode, err := normalizeBarcode(*request.Barcode)
+		if err != nil {
+			return err
+		}
+		var value any // nil = kolom dikosongkan (NULL)
+		if barcode != nil {
+			value = *barcode
+		}
+		fields["barcode"] = value
 	}
 	if request.ProductName != nil {
 		fields["product_name"] = *request.ProductName

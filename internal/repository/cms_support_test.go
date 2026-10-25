@@ -224,3 +224,52 @@ func TestDebts_ShowDeactivatedCustomer(t *testing.T) {
 		t.Errorf("search by deactivated customer: %+v, %v; want the paid debt with its customer", page, err)
 	}
 }
+
+func TestProductBarcode_UniqueAmongLiveAndLookup(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewProductRepository(db)
+	ctx := context.Background()
+	code := "TB" + uuid.NewString()[:8]
+
+	newProduct := func(sku string, barcode *string) *domain.Products {
+		return &domain.Products{SKU: sku, Barcode: barcode, ProductName: "Barcode test",
+			PurchasePrice: 1000, SellingPrice: 2000, SellingPriceDebt: 2100, Stock: 1}
+	}
+	first := newProduct("BC-"+uuid.NewString(), &code)
+	if err := repo.AddProduct(ctx, first); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	t.Cleanup(func() { db.Unscoped().Where("barcode = ?", code).Delete(&domain.Products{}) })
+
+	if err := repo.AddProduct(ctx, newProduct("BC-"+uuid.NewString(), &code)); !errors.Is(err, domain.ErrDuplicate) {
+		t.Fatalf("second live product with same barcode: err = %v; want duplicate", err)
+	}
+	bad := "has space"
+	if err := repo.AddProduct(ctx, newProduct("BC-"+uuid.NewString(), &bad)); err == nil {
+		t.Error("chk_products_barcode_format accepted a barcode with a space")
+	}
+
+	page, err := repo.GetAllProduct(ctx, domain.FilterAllProduct{Barcode: code, Limit: 10})
+	if err != nil || len(page.DataItem) != 1 || page.DataItem[0].ID != first.ID {
+		t.Fatalf("lookup by barcode = %+v, %v; want only the first product", page, err)
+	}
+
+	if err := repo.DeleteProduct(ctx, first.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	reuse := newProduct("BC-"+uuid.NewString(), &code)
+	if err := repo.AddProduct(ctx, reuse); err != nil {
+		t.Errorf("barcode of a deleted product must be reusable: %v", err)
+	}
+
+	upsertCode := "UP" + uuid.NewString()[:8]
+	bulk := newProduct("BC-"+uuid.NewString(), &upsertCode)
+	if err := repo.UpsertBulkProduct(ctx, []*domain.Products{bulk}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	t.Cleanup(func() { db.Unscoped().Where("barcode = ?", upsertCode).Delete(&domain.Products{}) })
+	byCode, err := repo.GetProductsByBarcodes(ctx, []string{upsertCode})
+	if err != nil || byCode[upsertCode] == nil || byCode[upsertCode].SKU != bulk.SKU {
+		t.Errorf("GetProductsByBarcodes = %+v, %v; want the upserted product", byCode, err)
+	}
+}
