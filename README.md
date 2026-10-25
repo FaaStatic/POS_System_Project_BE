@@ -1,6 +1,8 @@
 # Shop POS Backend — Go Fiber v3
 
-Backend point-of-sale (POS) untuk toko/warung kecil, dibangun dengan **Go Fiber v3** dan Clean Architecture. Menangani produk (fisik & digital), pelanggan, transaksi penjualan, hutang (kasbon), pembayaran online lewat Midtrans (QRIS & Virtual Account), notifikasi push (FCM), serta autentikasi kasir dengan sesi berbasis Redis. Laporan penjualan dan hutang bisa diekspor ke Excel dan PDF.
+Backend point-of-sale (POS) untuk toko/warung kecil, dibangun dengan **Go Fiber v3** dan Clean Architecture. Menangani produk (fisik & digital), kategori, pelanggan, staff, transaksi penjualan (termasuk antrean offline dari aplikasi kasir), hutang (kasbon), pembayaran online lewat Midtrans (QRIS & Virtual Account), notifikasi push (FCM), dashboard toko, serta autentikasi dengan sesi berbasis Redis. Laporan penjualan dan hutang dibuat dalam PDF; produk bisa diimpor dari CSV/Excel.
+
+API ini melayani dua klien: **CMS web** untuk owner (superadmin) dan **aplikasi kasir** Android/iOS untuk staff.
 
 ## Tujuan
 
@@ -8,17 +10,24 @@ Menyediakan API kasir yang ringan namun aman untuk toko kecil: pencatatan stok, 
 
 ## Fitur
 
-- **Modul domain**: produk, pelanggan, transaksi, hutang (kasbon), pembayaran, FCM, user/sesi
+- **Modul domain**: produk, kategori, pelanggan, transaksi, hutang (kasbon), pembayaran, dashboard, FCM/device, user/sesi
 - **Produk fisik & digital**: `ProductType` membedakan produk fisik (dikelola stok) dari produk digital (pulsa/e-wallet/paket data — tanpa stok, butuh nomor tujuan saat penjualan). Produk digital dilewati dari pengurangan/pengembalian stok
 - **Transaksi penjualan atomik**: stok dan hutang berubah dalam satu transaksi database. Produk dikunci `FOR UPDATE` berurutan per ID (bebas deadlock); konflik serentak (unique violation, serialization, deadlock) di-retry otomatis dengan backoff (lihat [internal/repository/retry.go](internal/repository/retry.go))
-- **Hutang**: satu hutang terbuka per pelanggan (dijaga partial unique index), pembayaran cicilan dengan `idempotency_key` agar request ulang tidak tercatat dua kali
+- **Aturan harga**: harga jual harus di atas harga beli dan harga hutang minimal 105% harga jual; dicek di usecase dan dijaga constraint `chk_products_price_rules`. Staff boleh mengubah produk, tapi harga beli, tipe produk, stok, dan kategori baru hanya untuk superadmin
+- **Kategori sebagai tabel**: nama unik tanpa membedakan huruf besar/kecil dan spasi di tepi (`key = lower(trim(name))`); kategori yang masih dipakai produk tidak bisa dihapus
+- **Transaksi offline (kasir)**: `POST /api/transactions/sync` menerima sampai 100 transaksi tunai/hutang yang dibuat tanpa internet. Tiap item membawa `client_ref` (UUID) sehingga antrean yang dikirim ulang tidak tercatat dua kali, memakai harga yang dibayar pembeli saat itu, dan berhasil/gagal sendiri-sendiri (`retryable` memberi tahu klien perlu kirim ulang atau tidak). Bila stok di server kurang, transaksi tetap diterima, stok berhenti di 0, dan transaksi ditandai `stock_conflict` untuk ditinjau admin
+- **Pembatalan transaksi** wajib menyertakan alasan; staff hanya boleh membatalkan transaksinya sendiri di hari yang sama
+- **Hutang**: satu hutang terbuka per pelanggan (dijaga partial unique index), pembayaran cicilan dengan `idempotency_key` agar request ulang tidak tercatat dua kali, hutang manual tercatat di `debt_adjustments` untuk laporan
+- **Manajemen staff & pelanggan**: nonaktifkan (soft delete), pulihkan, dan hapus permanen. Akun yang masih dirujuk riwayat penjualan/hutang dianonimkan alih-alih dihapus, supaya laporan lama tetap utuh. Menonaktifkan staff langsung mencabut semua sesi dan token push-nya
+- **Dashboard**: omzet, laba kotor, hutang (saldo, baru, dibayar), grafik harian, top 5 produk, pembagian metode bayar, device yang sedang login, dan jumlah konflik stok untuk rentang tanggal (maks 366 hari)
 - **Pembayaran online (Midtrans)**: charge **QRIS** dan **Virtual Account** (BCA `bank_transfer`, Mandiri `echannel`); harga item dihitung server-side dan biaya admin ditambahkan otomatis (QRIS 0.7%, VA flat). Status diperbarui lewat webhook yang diverifikasi `signature_key` (SHA-512, perbandingan constant-time). Produk digital **hanya lewat POS**, ditolak pada charge online
-- **Notifikasi push (FCM)**: registrasi & logout device token via Firebase Cloud Messaging
+- **Notifikasi push (FCM)**: registrasi & logout device token via Firebase Cloud Messaging; superadmin bisa melihat dan mencabut device
 - **Autentikasi & otorisasi**: access + refresh token JWT (HS256), sesi di Redis, role-based access (`superadmin` vs `staff`); password di-hash bcrypt
+- **Auth CMS web**: request dengan header `X-Client: web` menerima refresh token sebagai cookie `HttpOnly; SameSite=Strict`, bukan di body, sehingga JavaScript tidak bisa membacanya. Header itu juga menjadi penjaga CSRF. Login staff dari CMS ditolak (403)
 - **Akun privileged via CLI**: `superadmin` dibuat lewat command `create-admin`, bukan endpoint publik
 - **Paginasi keyset** (`after_time` + `after_id`) di semua endpoint list, didukung index `(created_at, id)`
 - **Laporan**: impor produk CSV/Excel (maks 10.000 baris, hasil per baris dikembalikan) dan PDF untuk struk, laporan bulanan, dan rekap hutang; PDF diunduh lewat `GET /api/reports/:file` (wajib JWT, nama file acak, kedaluwarsa 1 jam)
-- **Keamanan bawaan**: rate limiting (storage Redis) per IP untuk route publik dan per user untuk `/api/*`, bucket terpisah untuk login, refresh & webhook; Helmet/XSS headers, CORS, trusted proxy untuk pembacaan IP asli
+- **Keamanan bawaan**: rate limiting (storage Redis) per IP untuk route publik dan per user untuk `/api/*`, bucket terpisah untuk login, refresh & webhook; Helmet/XSS headers, CORS (allowlist origin CMS bila `server.cms_origins` diisi), trusted proxy untuk pembacaan IP asli
 - **Migrasi versioned dengan goose**: file SQL di-embed ke binary, dijalankan lewat command `migrate` / `migrate-reset`
 - **Konfigurasi per environment** via Viper (`.config.<env>.yaml`), override lewat env var, dan secret dari file (`<KEY>_FILE`)
 - **Docker Compose** untuk Postgres, Redis, migrasi, dan app; secret dikirim sebagai file, tidak lewat env var container
@@ -122,7 +131,7 @@ Semua objek dibuat manual di `cmd/fiber_command.go` (command `serve`), tanpa fra
 ├── infrastructure/
 │   ├── database/            # Init Postgres (GORM) + migrasi goose
 │   │   └── migrations/      # File SQL versioned (di-embed ke binary)
-│   ├── cache/               # Redis (sesi + storage rate limiter)
+│   ├── cache/               # Redis (satu client untuk sesi + storage rate limiter)
 │   ├── api/payment/         # Gateway Midtrans (charge QRIS/VA, verifikasi webhook)
 │   ├── fcm/                 # Sender Firebase Cloud Messaging
 │   └── logger/              # Logger zap kustom
@@ -133,15 +142,14 @@ Semua objek dibuat manual di `cmd/fiber_command.go` (command `serve`), tanpa fra
 │   ├── usecase/             # Business logic
 │   ├── delivery/http/
 │   │   ├── handler/         # Fiber v3 handlers + anotasi Swagger
-│   │   ├── middleware/      # JWT, CORS, rate limit, XSS, compress, logger
+│   │   ├── middleware/      # JWT, CORS, rate limit, XSS, feature flag, logger
 │   │   └── route/           # Pendaftaran route
 │   └── constant/            # Enum (role, payment, product type, status hutang) & cursor
 ├── pkg/
 │   ├── jwt/                 # Generate/verifikasi token
-│   ├── validator/           # StructValidator Fiber
 │   ├── response/            # Format response standar
 │   ├── pdf/                 # Laporan PDF (struk, hutang, bulanan)
-│   └── sheet/               # Impor/ekspor Excel & CSV
+│   └── sheet/               # Impor produk dari Excel & CSV
 ├── .dockerfile              # Image multi-stage (binary Go + swagger.json, user non-root)
 ├── docker-compose.yaml      # postgres, redis, migrate, app
 └── Makefile                 # Target lokal & docker-*
@@ -152,7 +160,7 @@ Semua objek dibuat manual di `cmd/fiber_command.go` (command `serve`), tanpa fra
 `route` → `middleware` (rate limit, JWT + role) → `handler` (bind + validasi DTO) → `usecase` → `repository` → Postgres/Redis.
 
 - Publik: `/auth/login`, `/auth/refresh`, dan webhook `/payments/notification` (diverifikasi `signature_key`, bukan JWT).
-- Sisanya di bawah grup `/api` yang dilindungi JWT; aksi sensitif (delete, update produk, laporan bulanan & hutang, register staff) hanya untuk `superadmin`.
+- Sisanya di bawah grup `/api` yang dilindungi JWT; aksi sensitif (manajemen staff, kategori, device, hapus data, stok, dashboard, laporan bulanan & hutang) hanya untuk `superadmin`.
 
 ### Alur konfigurasi
 
@@ -201,27 +209,37 @@ Akibatnya `docker inspect` hanya menampilkan path seperti `JWT_SECRET_FILE=/run/
 
 | Grup | Endpoint | Akses |
 | --- | --- | --- |
-| Auth | `POST /auth/login`, `POST /auth/refresh` | Publik (rate-limited) |
+| Auth | `POST /auth/login`, `POST /auth/refresh` (CMS: kirim `X-Client: web`, refresh token lewat cookie) | Publik (rate-limited) |
 | Auth | `POST /api/auth/logout` | JWT |
 | Auth | `POST /api/auth/register` (membuat staff) | superadmin |
+| Staff | `GET /api/users?status=active\|inactive`, `PATCH /api/users/:id`, `DELETE /api/users/:id` (nonaktifkan), `POST /api/users/:id/restore`, `DELETE /api/users/:id/permanent` (body `{"confirm": "<username>"}`) | superadmin |
+| Dashboard | `GET /api/dashboard/summary?date_start=&date_end=` (default hari ini) | superadmin |
 | Reports | `GET /api/reports/:file` | JWT |
 | Payments | `POST /payments/notification` (webhook Midtrans) | Publik (rate-limited, diverifikasi `signature_key`) |
 | Payments | `POST /api/payments/qris`, `POST /api/payments/va`, `GET /api/payments/:order_id/status` | JWT (503 bila Midtrans tidak dikonfigurasi) |
-| Products | `POST /api/products`, `POST /api/products/bulk`, `GET /api/products`, `GET /api/products/:id`, `PATCH /api/products/stock` | JWT |
-| Products | `PUT /api/products/:id`, `DELETE /api/products/:id` | superadmin |
-| Transactions | `POST /api/transactions`, `GET /api/transactions`, `GET /api/transactions/:id`, `GET /api/transactions/report/transaction` | JWT |
-| Transactions | `GET /api/transactions/report/month`, `DELETE /api/transactions/:id` | superadmin |
-| Customers | `POST /api/customers`, `GET /api/customers`, `GET /api/customers/:id`, `PUT /api/customers/:id` | JWT |
-| Customers | `GET /api/customers/:id/transactions` (riwayat transaksi pelanggan, berhalaman) | JWT |
-| Customers | `DELETE /api/customers/:id` | superadmin |
-| Debts | `POST /api/debts`, `POST /api/debts/pay`, `GET /api/debts`, `GET /api/debts/:id` | JWT |
-| Debts | `GET /api/debts/report`, `DELETE /api/debts/:id` | superadmin |
+| Payments | `GET /api/payments?status=&method=&date_start=&date_end=` (monitoring) | superadmin |
+| Products | `GET /api/products`, `GET /api/products/:id` | JWT |
+| Products | `PATCH /api/products/:id` (staff: tanpa harga beli, tipe produk, dan kategori baru) | JWT |
+| Products | `POST /api/products`, `POST /api/products/bulk`, `PATCH /api/products/stock`, `DELETE /api/products/:id` | superadmin |
+| Categories | `GET /api/categories` (dengan `product_count`) | JWT |
+| Categories | `POST /api/categories`, `PATCH /api/categories/:id`, `DELETE /api/categories/:id` | superadmin |
+| Transactions | `POST /api/transactions`, `POST /api/transactions/sync`, `GET /api/transactions` (`open_conflict=true` untuk konflik stok), `GET /api/transactions/:id`, `GET /api/transactions/report/transaction` | JWT |
+| Transactions | `DELETE /api/transactions/:id` (body `{"reason"}`; staff: transaksi sendiri hari ini) | JWT |
+| Transactions | `GET /api/transactions/report/month`, `PATCH /api/transactions/:id/conflict-review` | superadmin |
+| Customers | `POST /api/customers`, `GET /api/customers`, `GET /api/customers/:id`, `GET /api/customers/:id/transactions` | JWT |
+| Customers | `GET /api/customers?status=inactive`, `PUT /api/customers/:id`, `DELETE /api/customers/:id` (nonaktifkan), `POST /api/customers/:id/restore`, `DELETE /api/customers/:id/permanent` | superadmin |
+| Debts | `POST /api/debts/pay`, `GET /api/debts`, `GET /api/debts/:id` | JWT |
+| Debts | `POST /api/debts` (hutang manual), `GET /api/debts/report` | superadmin |
 | FCM | `POST /api/fcm/register`, `POST /api/fcm/logout` | JWT |
+| FCM | `GET /api/fcm/devices`, `DELETE /api/fcm/devices/:id` | superadmin |
 
 Catatan perilaku:
 
 - `GET /api/debts` tidak menyertakan daftar transaksi (`transaction_list` selalu `[]`) karena satu hutang terbuka bisa menampung transaksi tanpa batas. Ambil lewat `GET /api/customers/:id/transactions` memakai `customer_id` dari response hutang; filter `type_payment=1` untuk transaksi hutang saja. `GET /api/debts/:id` tetap menyertakan transaksinya.
 - `PUT /api/customers/:id` adalah partial update: field yang tidak dikirim tidak diubah, string kosong mengosongkan `phone_number`/`address`, nama tidak boleh kosong, body tanpa field → 400.
+- Hapus permanen hanya untuk data yang sudah dinonaktifkan. Response `mode` bernilai `deleted` (baris hilang) atau `anonymized` (baris tetap ada karena dirujuk riwayat). Pelanggan yang masih punya hutang belum lunas tidak bisa dinonaktifkan maupun dihapus.
+- `POST /api/transactions/sync`: jam device yang lebih dari 5 menit di depan atau lebih dari 30 hari di belakang waktu server diganti waktu server. Hanya tunai dan hutang yang bisa dicatat offline.
+- "Device online" di dashboard dihitung dari token push yang masih terpasang ke user (device sedang login).
 
 Dokumentasi lengkap ada di Swagger UI (root `/`) setelah server berjalan.
 
@@ -246,6 +264,7 @@ server:
   env: development
   host: localhost
   trusted_proxies: []      # IP/CIDR reverse proxy bila di belakang nginx
+  cms_origins: []          # origin CMS web, mis. https://cms.tokoku.id; kosong = CORS * tanpa cookie
   prefork: true            # opsional, default true; Docker memaksa false
 database:
   user: <user>
@@ -318,9 +337,23 @@ make test               # APP_ENV=development go test -v ./...
 make fmt / tidy / clean
 ```
 
+### Integration test
+
+Test yang butuh Postgres/Redis sungguhan dilewati kecuali env berikut diisi:
+
+| Env | Isi | Dipakai oleh |
+| --- | --- | --- |
+| `TEST_DATABASE_DSN` | Postgres yang sudah dimigrasi | `internal/repository` |
+| `TEST_REDIS_ADDR` | Redis, mis. `127.0.0.1:6390` | test pencabutan sesi |
+| `TEST_MIGRATION_DSN` | Database **kosong sekali pakai** (test menjalankan up, down sampai 0, lalu up) | `infrastructure/database` |
+
+Jangan arahkan env ini ke database development atau production: test menulis data, dan test migrasi menghapus seluruh skema.
+
 ## Migrasi database
 
-Migrasi baru ditambahkan sebagai file berikutnya di [infrastructure/database/migrations/](infrastructure/database/migrations/) (`00003_<nama>.sql`, format goose `-- +goose Up` / `-- +goose Down`). Jangan mengubah file yang sudah dijalankan; skema tidak memakai AutoMigrate. Di Docker, `make docker-rebuild` langsung menerapkan migrasi baru.
+Migrasi baru ditambahkan sebagai file berikutnya di [infrastructure/database/migrations/](infrastructure/database/migrations/) (saat ini terakhir `00007`, jadi berikutnya `00008_<nama>.sql`, format goose `-- +goose Up` / `-- +goose Down`). Jangan mengubah file yang sudah dijalankan; skema tidak memakai AutoMigrate. Di Docker, `make docker-rebuild` langsung menerapkan migrasi baru.
+
+Index pada tabel yang sedang dipakai dibuat dengan `CREATE INDEX CONCURRENTLY` di file yang diawali `-- +goose NO TRANSACTION` (contoh: `00007_list_indexes.sql`), supaya penulisan tidak terkunci selama index dibangun.
 
 ## Catatan teknis
 
@@ -328,3 +361,6 @@ Migrasi baru ditambahkan sebagai file berikutnya di [infrastructure/database/mig
 - **Prefork & Docker**: master prefork Fiber tidak meneruskan SIGTERM ke child, sehingga `docker stop` berakhir SIGKILL. Karena itu prefork dimatikan di container; satu proses Go tetap memakai semua core.
 - **TimeZone di DSN** sengaja tanpa tanda kutip: `gorm.io/driver/postgres` membaca nilainya mentah lewat regex, sehingga tanda kutip ikut terkirim dan ditolak Postgres.
 - **Image Alpine** di-build dengan `-tags timetzdata` karena Alpine tidak membawa database zona waktu.
+- **Cookie refresh CMS** memakai `SameSite=Strict`, jadi CMS dan API harus berada di site yang sama (mis. `cms.tokoku.id` dan `api.tokoku.id`). Isi `server.cms_origins` agar CORS mengizinkan credentials.
+- **Stok tidak pernah minus**: constraint `chk_products_stock_non_negative` tetap berlaku, termasuk untuk transaksi offline yang oversell (stok berhenti di 0 dan ditandai konflik).
+- **Pencabutan sesi** memindai key `session:*`/`refresh:*` di Redis. Biayanya sebanding jumlah sesi aktif, tapi hanya terjadi saat admin menonaktifkan staff atau mengganti password.
