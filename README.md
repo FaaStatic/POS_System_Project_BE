@@ -14,6 +14,7 @@ Menyediakan API kasir yang ringan namun aman untuk toko kecil: pencatatan stok, 
 - **Produk fisik & digital**: `ProductType` membedakan produk fisik (dikelola stok) dari produk digital (pulsa/e-wallet/paket data — tanpa stok, butuh nomor tujuan saat penjualan). Produk digital dilewati dari pengurangan/pengembalian stok
 - **Transaksi penjualan atomik**: stok dan hutang berubah dalam satu transaksi database. Produk dikunci `FOR UPDATE` berurutan per ID (bebas deadlock); konflik serentak (unique violation, serialization, deadlock) di-retry otomatis dengan backoff (lihat [internal/repository/retry.go](internal/repository/retry.go))
 - **Aturan harga**: harga jual harus di atas harga beli dan harga hutang minimal 105% harga jual; dicek di usecase dan dijaga constraint `chk_products_price_rules`. Staff boleh mengubah produk, tapi harga beli, tipe produk, stok, dan kategori baru hanya untuk superadmin
+- **Barcode produk**: opsional, satu per produk, unik di antara produk aktif (huruf, angka, `-._`, maks 64 karakter, tanpa cek checksum karena toko juga memakai barcode buatan sendiri). Di impor massal, sel barcode kosong mempertahankan barcode lama, dan barcode yang bentrok hanya menggagalkan baris itu
 - **Kategori sebagai tabel**: nama unik tanpa membedakan huruf besar/kecil dan spasi di tepi (`key = lower(trim(name))`); kategori yang masih dipakai produk tidak bisa dihapus
 - **Transaksi offline (kasir)**: `POST /api/transactions/sync` menerima sampai 100 transaksi tunai/hutang yang dibuat tanpa internet. Tiap item membawa `client_ref` (UUID) sehingga antrean yang dikirim ulang tidak tercatat dua kali, memakai harga yang dibayar pembeli saat itu, dan berhasil/gagal sendiri-sendiri (`retryable` memberi tahu klien perlu kirim ulang atau tidak). Bila stok di server kurang, transaksi tetap diterima, stok berhenti di 0, dan transaksi ditandai `stock_conflict` untuk ditinjau admin
 - **Pembatalan transaksi** wajib menyertakan alasan; staff hanya boleh membatalkan transaksinya sendiri di hari yang sama
@@ -218,7 +219,7 @@ Akibatnya `docker inspect` hanya menampilkan path seperti `JWT_SECRET_FILE=/run/
 | Payments | `POST /payments/notification` (webhook Midtrans) | Publik (rate-limited, diverifikasi `signature_key`) |
 | Payments | `POST /api/payments/qris`, `POST /api/payments/va`, `GET /api/payments/:order_id/status` | JWT (503 bila Midtrans tidak dikonfigurasi) |
 | Payments | `GET /api/payments?status=&method=&date_start=&date_end=` (monitoring) | superadmin |
-| Products | `GET /api/products`, `GET /api/products/:id` | JWT |
+| Products | `GET /api/products` (`barcode=` untuk hasil scan, exact match), `GET /api/products/:id` | JWT |
 | Products | `PATCH /api/products/:id` (staff: tanpa harga beli, tipe produk, dan kategori baru) | JWT |
 | Products | `POST /api/products`, `POST /api/products/bulk`, `PATCH /api/products/stock`, `DELETE /api/products/:id` | superadmin |
 | Categories | `GET /api/categories` (dengan `product_count`) | JWT |
@@ -351,7 +352,7 @@ Jangan arahkan env ini ke database development atau production: test menulis dat
 
 ## Migrasi database
 
-Migrasi baru ditambahkan sebagai file berikutnya di [infrastructure/database/migrations/](infrastructure/database/migrations/) (saat ini terakhir `00007`, jadi berikutnya `00008_<nama>.sql`, format goose `-- +goose Up` / `-- +goose Down`). Jangan mengubah file yang sudah dijalankan; skema tidak memakai AutoMigrate. Di Docker, `make docker-rebuild` langsung menerapkan migrasi baru.
+Migrasi baru ditambahkan sebagai file berikutnya di [infrastructure/database/migrations/](infrastructure/database/migrations/) (saat ini terakhir `00008`, jadi berikutnya `00009_<nama>.sql`, format goose `-- +goose Up` / `-- +goose Down`). Jangan mengubah file yang sudah dijalankan; skema tidak memakai AutoMigrate. Di Docker, `make docker-rebuild` langsung menerapkan migrasi baru.
 
 Index pada tabel yang sedang dipakai dibuat dengan `CREATE INDEX CONCURRENTLY` di file yang diawali `-- +goose NO TRANSACTION` (contoh: `00007_list_indexes.sql`), supaya penulisan tidak terkunci selama index dibangun.
 

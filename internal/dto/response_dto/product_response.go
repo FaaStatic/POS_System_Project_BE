@@ -9,6 +9,7 @@ import (
 type ProductDtoResponse struct {
 	ID               uuid.UUID  `json:"id"`
 	SKU              string     `json:"sku"`
+	Barcode          *string    `json:"barcode"`
 	ProductName      string     `json:"product_name"`
 	Unit             int        `json:"unit"`
 	ProductType      int        `json:"product_type"`

@@ -10,6 +10,7 @@ type GetProduct struct {
 
 type AddProduct struct {
 	SKU              string   `json:"sku" validate:"required"`
+	Barcode          string   `json:"barcode,omitempty"`
 	ProductName      string   `json:"product_name" validate:"required"`
 	Unit             int      `json:"unit,omitempty" validate:"omitempty,oneof=0 1 2 3 4 5"`
 	ProductType      int      `json:"product_type,omitempty" validate:"omitempty,oneof=0 1"`
@@ -30,8 +31,10 @@ type DeleteProduct struct {
 }
 
 type UpdateProduct struct {
-	ID               string  `json:"id" validate:"required,uuid"`
-	SKU              *string `json:"sku,omitempty"`
+	ID  string  `json:"id" validate:"required,uuid"`
+	SKU *string `json:"sku,omitempty"`
+	// Barcode: "" menghapus barcode produk.
+	Barcode          *string `json:"barcode,omitempty"`
 	ProductName      *string `json:"product_name,omitempty"`
 	Unit             *int    `json:"unit,omitempty" validate:"omitempty,oneof=0 1 2 3 4 5"`
 	ProductType      *int    `json:"product_type,omitempty" validate:"omitempty,oneof=0 1"`
@@ -53,6 +56,7 @@ type GetAllProduct struct {
 	UserId     string  `query:"user_id" validate:"required"`
 	CategoryID string  `query:"category_id" validate:"omitempty,uuid"`
 	Search     string  `query:"search"`
+	Barcode    string  `query:"barcode"`
 	Limit      int     `query:"limit" validate:"omitempty,min=1,max=100"`
 	LastId     *string `query:"last_id"`
 	AfterTime  *string `query:"after_time"`

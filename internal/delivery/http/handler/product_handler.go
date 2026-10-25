@@ -107,6 +107,7 @@ func (h *ProductHandler) Get(c fiber.Ctx) error {
 //	@Security		BearerAuth
 //	@Param			category_id	query		string	false	"Filter category ID"
 //	@Param			search		query		string	false	"Search by product name/SKU"
+//	@Param			barcode		query		string	false	"Exact barcode match (cashier scan)"
 //	@Param			limit		query		int		false	"Number of items per page"
 //	@Param			last_id		query		string	false	"Last ID for cursor pagination"
 //	@Param			after_time	query		string	false	"Time cursor for pagination"

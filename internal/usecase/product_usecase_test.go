@@ -35,7 +35,18 @@ type fakeProdRepo struct {
 	categories    map[string]uuid.UUID // key -> id, kategori yang sudah ada
 	createdKeys   []string
 	existingBySKU map[string]*domain.Products
+	byBarcode     map[string]*domain.Products
 	upserted      []*domain.Products
+}
+
+func (f *fakeProdRepo) GetProductsByBarcodes(ctx context.Context, barcodes []string) (map[string]*domain.Products, error) {
+	found := map[string]*domain.Products{}
+	for _, b := range barcodes {
+		if p, ok := f.byBarcode[b]; ok {
+			found[b] = p
+		}
+	}
+	return found, nil
 }
 
 func (f *fakeProdRepo) GetCategoryIDs(ctx context.Context, names []string, create bool) (map[string]uuid.UUID, error) {
@@ -348,5 +359,88 @@ func TestAddBulkProduct_UpsertRules(t *testing.T) {
 	}
 	if len(repo.createdKeys) != 1 || repo.createdKeys[0] != "sembako" {
 		t.Errorf("Sembako and ' sembako ' must create one category, created %v", repo.createdKeys)
+	}
+}
+
+func TestNormalizeBarcode(t *testing.T) {
+	if got, err := normalizeBarcode("  "); got != nil || err != nil {
+		t.Errorf("blank = %v, %v; want nil (no barcode)", got, err)
+	}
+	if got, err := normalizeBarcode(" 8991234567890 "); err != nil || *got != "8991234567890" {
+		t.Errorf("EAN-13 = %v, %v; want trimmed code", got, err)
+	}
+	for _, bad := range []string{"89 912", "kode#1", strings.Repeat("9", 65)} {
+		if _, err := normalizeBarcode(bad); !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("%q: err = %v; want validation error", bad, err)
+		}
+	}
+}
+
+func TestUpdateProduct_BlankBarcodeClearsIt(t *testing.T) {
+	repo := &fakeProdRepo{}
+	u := newTestProductUsecase(repo)
+	blank := ""
+	if err := u.UpdateProductShopWithLock(context.Background(), &requestdto.UpdateProduct{ID: uuid.NewString(), Barcode: &blank}); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if v, ok := repo.updatedFields["barcode"]; !ok || v != nil {
+		t.Errorf("barcode field = %v (present %v); want explicit nil to store NULL", v, ok)
+	}
+}
+
+func TestAddBulkProduct_BarcodeRules(t *testing.T) {
+	kept := "111"
+	repo := &fakeProdRepo{
+		existingBySKU: map[string]*domain.Products{"GULA": {SKU: "GULA", Barcode: &kept}},
+		byBarcode:     map[string]*domain.Products{"222": {SKU: "KOPI"}},
+	}
+	u := newTestProductUsecase(repo)
+
+	csv := "sku,barcode,product_name,purchase_price,selling_price,selling_price_debt\n" +
+		"GULA,,Gula 1kg,10000,12000,12600\n" + // kosong: barcode lama dipertahankan
+		"TEH,222,Teh,1000,1500,1600\n" + // dipakai KOPI
+		"SUSU,333,Susu,1000,1500,1600\n" +
+		"MIE,333,Mie,1000,1500,1600\n" + // ganda di file
+		"ROTI,ab#c,Roti,1000,1500,1600\n" // format salah
+	report, err := u.AddBulkProductShopWithLock(context.Background(), &requestdto.AddBulkProduct{FileUpload: bulkUpload(t, csv)})
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+
+	lines := map[int]bool{}
+	for _, re := range report.RowErrors {
+		lines[re.Line] = true
+	}
+	if len(report.RowErrors) != 3 || !lines[3] || !lines[5] || !lines[6] {
+		t.Errorf("row errors = %+v; want lines 3 (taken), 5 (dup in file), 6 (format)", report.RowErrors)
+	}
+	bySKU := map[string]*domain.Products{}
+	for _, p := range repo.upserted {
+		bySKU[p.SKU] = p
+	}
+	if g := bySKU["GULA"]; g == nil || g.Barcode == nil || *g.Barcode != "111" {
+		t.Errorf("GULA barcode = %+v; want the stored 111 kept", g)
+	}
+	if s := bySKU["SUSU"]; s == nil || s.Barcode == nil || *s.Barcode != "333" {
+		t.Errorf("SUSU barcode = %+v; want 333", s)
+	}
+}
+
+func TestAddBulkProduct_RejectedRowDoesNotClaimBarcode(t *testing.T) {
+	repo := &fakeProdRepo{}
+	u := newTestProductUsecase(repo)
+
+	csv := "sku,barcode,product_name,purchase_price,selling_price,selling_price_debt\n" +
+		"TEH,444,Teh,1000,1500,1500\n" + // harga hutang < +5%: ditolak
+		"KOPI,444,Kopi,1000,1500,1600\n" // valid, barcode 444 harus tetap bisa dipakai
+	report, err := u.AddBulkProductShopWithLock(context.Background(), &requestdto.AddBulkProduct{FileUpload: bulkUpload(t, csv)})
+	if err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	if len(report.RowErrors) != 1 || report.RowErrors[0].Line != 2 {
+		t.Fatalf("row errors = %+v; want only line 2 (price)", report.RowErrors)
+	}
+	if len(repo.upserted) != 1 || repo.upserted[0].SKU != "KOPI" || *repo.upserted[0].Barcode != "444" {
+		t.Errorf("upserted = %+v; want KOPI with barcode 444", repo.upserted)
 	}
 }
