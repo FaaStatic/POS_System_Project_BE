@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"shop_project_be/internal/domain"
@@ -139,12 +138,8 @@ func (u *userRepository) PurgeUser(ctx context.Context, id uuid.UUID, anonFields
 			return domain.Conflict("deactivate the user before deleting it permanently")
 		}
 
-		var referenced bool
-		if err := tx.Raw(`SELECT EXISTS (SELECT 1 FROM transactions WHERE user_id = @id)
-			OR EXISTS (SELECT 1 FROM payments WHERE user_id = @id)
-			OR EXISTS (SELECT 1 FROM debt_payments WHERE user_id = @id)
-			OR EXISTS (SELECT 1 FROM debt_adjustments WHERE user_id = @id)`,
-			sql.Named("id", id)).Scan(&referenced).Error; err != nil {
+		referenced, err := hasRowsFor(tx, "user_id", id, &domain.Transactions{}, &domain.Payment{}, &domain.DebtPayments{}, &domain.DebtAdjustments{})
+		if err != nil {
 			return internalErr(fmt.Errorf("failed to check user history: %w", err))
 		}
 

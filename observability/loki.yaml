@@ -1,0 +1,43 @@
+# Loki satu proses (monolith) dengan penyimpanan di disk, cukup untuk satu toko.
+# Dokumentasi: https://grafana.com/docs/loki/latest/configure/
+auth_enabled: false # satu tenant; tanpa header X-Scope-OrgID
+
+server:
+  http_listen_port: 3100
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+
+schema_config:
+  configs:
+    - from: 2024-04-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Log lebih tua dari ini dihapus compactor (336h = 14 hari). Ubah sesuai
+  # kebutuhan audit; ruang disk yang dipakai naik linear dengan nilainya.
+  retention_period: 336h
+  volume_enabled: true # grafik volume log di Grafana Explore
+
+compactor:
+  working_directory: /loki/compactor
+  retention_enabled: true # tanpa ini retention_period di atas tidak berlaku
+  delete_request_store: filesystem
+
+analytics:
+  reporting_enabled: false

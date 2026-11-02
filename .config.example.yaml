@@ -48,3 +48,10 @@ midtrans:
   environment:
 firebase:
   google_application_credentials:
+grafana:
+  # Dashboard log (Loki + Grafana, lihat observability/) di http://127.0.0.1:<port>.
+  # admin_password WAJIB diisi: make docker-up berhenti kalau kosong, sebab
+  # Grafana akan memakai password bawaan "admin". Dipakai saat Grafana pertama
+  # kali dijalankan; mengubahnya sesudahnya lewat Grafana (Profile > Change password).
+  port:
+  admin_password:

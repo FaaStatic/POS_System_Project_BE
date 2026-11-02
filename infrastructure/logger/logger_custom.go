@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"go.uber.org/zap"
@@ -21,29 +22,47 @@ type GormZapLogger struct {
 
 var Logger *zap.Logger
 
+// loggerConfig: production selalu JSON. Development memakai console berwarna
+// hanya saat stderr adalah terminal; di container stderr bukan TTY, jadi
+// outputnya JSON yang dibaca Alloy baris per baris lalu dikirim ke Loki.
+func loggerConfig(env string, tty bool) zap.Config {
+	cfg := zap.NewProductionConfig()
+	if env != "production" {
+		cfg = zap.NewDevelopmentConfig()
+	}
+	// Sampling bawaan zap membuang log identik di atas 100/detik, sehingga
+	// jumlah "HTTP Request" di Loki bisa lebih kecil dari request sebenarnya.
+	cfg.Sampling = nil
+
+	if env != "production" && tty {
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		cfg.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
+		return cfg
+	}
+
+	// Konfigurasi development memakai key satu huruf ("L", "T", "M"); JSON untuk
+	// Loki harus memakai key yang sama di semua environment (level, ts, msg).
+	// Durasi berupa angka detik (bukan "1.2ms") supaya bisa difilter di LogQL,
+	// mis. | json | elapsed > 0.2
+	encoder := zap.NewProductionEncoderConfig()
+	encoder.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoder.EncodeDuration = zapcore.SecondsDurationEncoder
+	cfg.Encoding = "json"
+	cfg.EncoderConfig = encoder
+	return cfg
+}
+
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
+}
+
 func LoggerCustom(env string) {
-
-	var (
-		err error
-	)
-
-	if env == "production" {
-		Logger, err = zap.NewProduction()
-		if err != nil {
-			panic("Failed to initialize logger!")
-		}
-	} else {
-
-		config := zap.NewDevelopmentConfig()
-
-		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-		config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-		config.EncoderConfig.EncodeCaller = zapcore.ShortCallerEncoder
-
-		Logger, err = config.Build()
-		if err != nil {
-			panic("Failed to initialize logger!")
-		}
+	var err error
+	Logger, err = loggerConfig(env, isTerminal(os.Stderr)).Build()
+	if err != nil {
+		panic("Failed to initialize logger: " + err.Error())
 	}
 }
 

@@ -257,3 +257,43 @@ func TestDeleteTransaction_PartialReversalKeepsRemainderOwed(t *testing.T) {
 		t.Errorf("expected status to remain BELUM_LUNAS while 11000 is still owed, got %v", debt.Status)
 	}
 }
+
+func TestStockBatch_MultiProductCartAndDuplicateLine(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewTransactionRepository(db)
+
+	other := &domain.Products{SKU: "SKU-" + uuid.NewString(), ProductName: "Other", PurchasePrice: 1, SellingPrice: 2, SellingPriceDebt: 3, Stock: 5}
+	if err := db.Create(other).Error; err != nil {
+		t.Fatalf("seed second product: %v", err)
+	}
+	// Didaftarkan sebelum seed supaya jalan setelah cleanup detail transaksi.
+	t.Cleanup(func() { db.Unscoped().Delete(&domain.Products{}, "id = ?", other.ID) })
+	user, product, _ := seedUserProductCustomer(t, db, 10)
+
+	var before domain.Products
+	db.First(&before, "id = ?", product.ID)
+
+	trx := newTrx(user, product, nil, enum.MoneyPayment(0), 2, 10000)
+	trx.TransactionDetail = append(trx.TransactionDetail,
+		domain.TransactionsDetail{ProductID: other.ID, Price: 2, PriceDebt: 3, Qty: 1, Subtotal: 2},
+		domain.TransactionsDetail{ProductID: product.ID, Price: 10000, PriceDebt: 10000, Qty: 3, Subtotal: 30000},
+	)
+	if _, err := repo.CreateTransaction(context.Background(), trx, false, true); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	stockOf := func(id uuid.UUID) (p domain.Products) { db.First(&p, "id = ?", id); return }
+	if got := stockOf(product.ID); got.Stock != 5 || !got.UpdatedAt.After(before.UpdatedAt) {
+		t.Errorf("duplicate lines: stock = %v (want 5), updated_at advanced = %v", got.Stock, got.UpdatedAt.After(before.UpdatedAt))
+	}
+	if got := stockOf(other.ID).Stock; got != 4 {
+		t.Errorf("second product stock = %v, want 4", got)
+	}
+
+	if err := repo.DeleteTransaction(context.Background(), trx.ID, "test"); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if a, b := stockOf(product.ID).Stock, stockOf(other.ID).Stock; a != 10 || b != 5 {
+		t.Errorf("after cancel stock = %v/%v, want 10/5", a, b)
+	}
+}

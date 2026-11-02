@@ -1,0 +1,56 @@
+// Grafana Alloy: membaca stdout/stderr container lewat Docker API, lalu
+// mengirimnya ke Loki. Aplikasi tidak tahu Loki ada; ia hanya menulis JSON ke
+// stdout, sehingga Loki mati tidak pernah mengganggu request.
+// Dokumentasi: https://grafana.com/docs/alloy/latest/reference/components/loki/loki.source.docker/
+
+// 1. Temukan container yang diberi label `logging=true` di docker-compose.yaml.
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["logging=true"]
+  }
+}
+
+// 2. Nama service compose (app, migrate, postgres, redis) jadi label `service`.
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+}
+
+// 3. Baca log tiap container. `env` = development / production.
+loki.source.docker "containers" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.containers.targets
+  relabel_rules = discovery.relabel.containers.rules
+  labels        = {"env" = sys.env("APP_ENV")}
+  forward_to    = [loki.process.json.receiver]
+}
+
+// 4. Baris JSON dari aplikasi: ambil `level` jadi label (hanya ~6 nilai, aman
+// untuk index Loki). Field lain (status, path, latency_ms, request_id, ...)
+// sengaja TIDAK dijadikan label; ia dibaca saat query dengan `| json`.
+// Baris non-JSON (postgres, redis) lolos tanpa label level.
+loki.process "json" {
+  stage.json {
+    expressions = {level = "level"}
+  }
+
+  stage.labels {
+    values = {level = ""}
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// 5. Kirim ke Loki.
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

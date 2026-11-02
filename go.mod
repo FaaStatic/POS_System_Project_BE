@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	firebase.google.com/go/v4 v4.20.0
-	github.com/bytedance/sonic v1.15.0
+	github.com/bytedance/sonic v1.15.5
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/gofiber/contrib/v3/swaggerui v1.0.1
@@ -93,7 +93,7 @@ require (
 require (
 	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/bytedance/gopkg v0.1.4 // indirect
-	github.com/bytedance/sonic/loader v0.5.0 // indirect
+	github.com/bytedance/sonic/loader v0.5.3 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/go-openapi/analysis v0.24.2 // indirect
 	github.com/go-openapi/errors v0.22.6 // indirect

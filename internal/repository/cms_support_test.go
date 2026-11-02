@@ -273,3 +273,89 @@ func TestProductBarcode_UniqueAmongLiveAndLookup(t *testing.T) {
 		t.Errorf("GetProductsByBarcodes = %+v, %v; want the upserted product", byCode, err)
 	}
 }
+
+func TestGetDailyDebtFlow_MergesAdjustmentsAndPaymentsPerDay(t *testing.T) {
+	db := openTestDB(t)
+	user, _, customer := seedUserProductCustomer(t, db, 1)
+	debt := &domain.Debts{CustomerID: customer.ID, TotalDebt: 0, RemainingDebt: 0, Status: enum.LUNAS}
+	if err := db.Create(debt).Error; err != nil {
+		t.Fatalf("seed debt: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Delete(&domain.DebtPayments{}, "debt_id = ?", debt.ID)
+		db.Unscoped().Delete(&domain.DebtAdjustments{}, "debt_id = ?", debt.ID)
+	})
+
+	// Maret 2001 supaya tidak bercampur dengan data bulan berjalan.
+	wib := domain.StoreLocation
+	at := func(day int) time.Time { return time.Date(2001, 3, day, 12, 0, 0, 0, wib) }
+	for _, a := range []domain.DebtAdjustments{
+		{DebtID: debt.ID, UserID: user.ID, Amount: 100, CreatedAt: at(5)},
+		{DebtID: debt.ID, UserID: user.ID, Amount: 50, CreatedAt: at(5)},
+	} {
+		if err := db.Create(&a).Error; err != nil {
+			t.Fatalf("seed adjustment: %v", err)
+		}
+	}
+	for _, p := range []domain.DebtPayments{
+		{DebtID: debt.ID, UserID: user.ID, NominalBayar: 30, TanggalBayar: at(5)},
+		{DebtID: debt.ID, UserID: user.ID, NominalBayar: 20, TanggalBayar: at(7)},
+	} {
+		if err := db.Create(&p).Error; err != nil {
+			t.Fatalf("seed payment: %v", err)
+		}
+	}
+
+	flow, err := repository.NewTransactionRepository(db).GetDailyDebtFlow(context.Background(), 3, 2001)
+	if err != nil {
+		t.Fatalf("GetDailyDebtFlow: %v", err)
+	}
+	if len(flow) != 2 {
+		t.Fatalf("got %d days, want 2: %+v", len(flow), flow)
+	}
+	if d := flow[0]; d.Date.Day() != 5 || d.Manual != 150 || d.Paid != 30 {
+		t.Errorf("day 5 = %+v; want manual 150 and paid 30 merged on one row", d)
+	}
+	if d := flow[1]; d.Date.Day() != 7 || d.Manual != 0 || d.Paid != 20 {
+		t.Errorf("day 7 = %+v; want a payments-only day after day 5", d)
+	}
+}
+
+func TestPurgeCustomer_DeletesOrAnonymizes(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewCustomerRepository(db)
+	ctx := context.Background()
+
+	idle := &domain.Customers{Name: "idle-" + uuid.NewString()}
+	if err := db.Create(idle).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Cleanup(func() { db.Unscoped().Delete(&domain.Customers{}, "id = ?", idle.ID) })
+	if err := repo.DeleteCustomer(ctx, idle.ID); err != nil {
+		t.Fatalf("deactivate idle: %v", err)
+	}
+	anonymized, err := repo.PurgeCustomer(ctx, idle.ID, map[string]any{"name": "x"})
+	if err != nil || anonymized {
+		t.Fatalf("purge idle customer: anonymized=%v err=%v; want hard delete", anonymized, err)
+	}
+	if _, err := repo.GetCustomer(ctx, idle.ID, true); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("idle customer still present: %v", err)
+	}
+
+	user, product, buyer := seedUserProductCustomer(t, db, 5)
+	if _, err := repository.NewTransactionRepository(db).CreateTransaction(ctx, newTrx(user, product, buyer, enum.MoneyPayment(0), 1, 10000), false, true); err != nil {
+		t.Fatalf("seed sale: %v", err)
+	}
+	if err := repo.DeleteCustomer(ctx, buyer.ID); err != nil {
+		t.Fatalf("deactivate buyer: %v", err)
+	}
+	anonName := "pelanggan-terhapus-" + uuid.NewString()[:8]
+	anonymized, err = repo.PurgeCustomer(ctx, buyer.ID, map[string]any{"name": anonName})
+	if err != nil || !anonymized {
+		t.Fatalf("purge buyer: anonymized=%v err=%v; want anonymized", anonymized, err)
+	}
+	kept, err := repo.GetCustomer(ctx, buyer.ID, true)
+	if err != nil || kept.Name != anonName {
+		t.Errorf("buyer row = %+v, %v; want kept with anonymized name", kept, err)
+	}
+}

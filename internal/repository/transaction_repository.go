@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -284,27 +285,56 @@ func (t *transactionRepository) GetDailyReport(ctx context.Context, month int, y
 
 // GetDailyDebtFlow: hutang manual (debt_adjustments) dan pembayaran hutang
 // (debt_payments) per hari. Pembayaran hanya mengurangi saldo, tidak terikat barang.
+// Dua query per tabel lalu digabung per hari di sini: GORM tidak punya UNION.
 func (t *transactionRepository) GetDailyDebtFlow(ctx context.Context, month int, year int) ([]domain.DailyDebtFlow, error) {
 	start, end := monthRange(month, year)
+	db := t.db.WithContext(ctx)
 
-	var rows []domain.DailyDebtFlow
-	result := t.db.WithContext(ctx).Raw(`SELECT date, SUM(manual)::bigint AS manual, SUM(paid)::bigint AS paid FROM (
-			SELECT `+storeDate("created_at")+` AS date, amount AS manual, 0 AS paid
-			FROM debt_adjustments WHERE created_at >= ? AND created_at < ?
-			UNION ALL
-			SELECT `+storeDate("tanggal_bayar")+`, 0, nominal_bayar
-			FROM debt_payments WHERE tanggal_bayar >= ? AND tanggal_bayar < ?
-		) AS flow GROUP BY date ORDER BY date`, start, end, start, end).
-		Scan(&rows)
-	if result.Error != nil {
-		return nil, fmt.Errorf("failed to get daily debt flow: %w", result.Error)
+	manualDay, paidDay := storeDate("created_at"), storeDate("tanggal_bayar")
+	var manual, paid []domain.DailyDebtFlow
+	if err := db.Model(&domain.DebtAdjustments{}).
+		Select(manualDay+" AS date, SUM(amount)::bigint AS manual").
+		Where("created_at >= ? AND created_at < ?", start, end).
+		Group(manualDay).Scan(&manual).Error; err != nil {
+		return nil, fmt.Errorf("failed to get daily debt flow: %w", err)
 	}
-	return rows, nil
+	if err := db.Model(&domain.DebtPayments{}).
+		Select(paidDay+" AS date, SUM(nominal_bayar)::bigint AS paid").
+		Where("tanggal_bayar >= ? AND tanggal_bayar < ?", start, end).
+		Group(paidDay).Scan(&paid).Error; err != nil {
+		return nil, fmt.Errorf("failed to get daily debt flow: %w", err)
+	}
+
+	byDay := make(map[string]*domain.DailyDebtFlow, len(manual)+len(paid))
+	for _, rows := range [][]domain.DailyDebtFlow{manual, paid} {
+		for _, r := range rows {
+			key := r.Date.Format(time.DateOnly)
+			day, ok := byDay[key]
+			if !ok {
+				day = &domain.DailyDebtFlow{Date: r.Date}
+				byDay[key] = day
+			}
+			day.Manual += r.Manual
+			day.Paid += r.Paid
+		}
+	}
+	flow := make([]domain.DailyDebtFlow, 0, len(byDay))
+	for _, day := range byDay {
+		flow = append(flow, *day)
+	}
+	slices.SortFunc(flow, func(a, b domain.DailyDebtFlow) int { return a.Date.Compare(b.Date) })
+	return flow, nil
 }
 
 func (t *transactionRepository) soldLines(ctx context.Context, month, year int) *gorm.DB {
 	start, end := monthRange(month, year)
-	return t.db.WithContext(ctx).
+	return soldLinesBetween(t.db.WithContext(ctx), start, end)
+}
+
+// soldLinesBetween: baris detail penjualan transaksi aktif di [start, end),
+// dipakai laporan bulanan dan dashboard.
+func soldLinesBetween(db *gorm.DB, start, end time.Time) *gorm.DB {
+	return db.
 		Model(&domain.Transactions{}).
 		Joins("JOIN transactions_detail ON transactions_detail.transaction_id = transactions.id").
 		Joins("LEFT JOIN products ON products.id = transactions_detail.product_id").
