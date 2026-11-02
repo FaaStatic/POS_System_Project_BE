@@ -26,6 +26,9 @@ func InitDB(config envconfig.DBConfig, log *zap.Logger, env string) (*gorm.DB, e
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger:                 gormLog,
 		PrepareStmt:            true,
+		// `IN ?` dengan panjang berbeda = SQL berbeda; tanpa batas cache-nya
+		// tumbuh terus (default gorm: MaxInt entri, TTL 24 jam).
+		PrepareStmtMaxSize: 500,
 		SkipDefaultTransaction: true,
 		TranslateError:         true,
 	})

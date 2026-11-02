@@ -10,6 +10,7 @@ RUN adduser -D -u 10001 app
 WORKDIR /app
 COPY --from=build /out/pos /app/pos
 COPY swagger.json ./
+RUN mkdir -p storage/reports && chown -R app:app storage
 USER app
 EXPOSE 3030
 ENTRYPOINT ["/app/pos"]

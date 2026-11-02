@@ -139,6 +139,17 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 			unitPrice = product.SellingPriceDebt
 		}
 		if (!deductStock || offline != nil) && detail.UnitPrice != nil {
+			// Harga offline boleh beda dari master (harga berubah saat kasir offline),
+			// tapi dicatat supaya admin bisa mengaudit selisihnya di log.
+			if offline != nil && *detail.UnitPrice != unitPrice {
+				t.log.Warn("OFFLINE_PRICE_OVERRIDE: offline sale price differs from master price",
+					zap.String("client_ref", offline.clientRef.String()),
+					zap.String("user_id", dto.UserId),
+					zap.String("product_id", detail.ProductId),
+					zap.Int64("master_price", unitPrice),
+					zap.Int64("offline_price", *detail.UnitPrice),
+				)
+			}
 			unitPrice = *detail.UnitPrice
 		}
 

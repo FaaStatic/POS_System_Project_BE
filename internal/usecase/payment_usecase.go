@@ -156,7 +156,9 @@ func applyChargeResult(p *domain.Payment, r *domain.GatewayChargeResult) {
 }
 
 func (u *paymentUsecase) failPayment(ctx context.Context, orderID string) {
-	err := u.paymentRepo.UpdateWithLock(ctx, orderID, func(p *domain.Payment) (bool, error) {
+	// Tetap jalan walau request sudah selesai: kalau gagal, stok tertahan sampai
+	// ListStalePending menyapunya (24 jam untuk payment tanpa expiry_time).
+	err := u.paymentRepo.UpdateWithLock(context.WithoutCancel(ctx), orderID, func(p *domain.Payment) (bool, error) {
 		p.Status = domain.PaymentFailed
 		p.StockReserved = false
 		return true, nil

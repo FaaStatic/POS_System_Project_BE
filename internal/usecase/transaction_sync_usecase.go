@@ -112,8 +112,9 @@ func parseOfflineTransaction(userID string, item requestdto.OfflineTransaction, 
 		if d.Qty <= 0 {
 			return nil, nil, domain.Validation(fmt.Sprintf("details[%d].qty must be greater than 0", i))
 		}
-		if d.UnitPrice < 0 {
-			return nil, nil, domain.Validation(fmt.Sprintf("details[%d].unit_price must not be negative", i))
+		// Harga master selalu > 0 (validatePrices), jadi snapshot kasir yang sah juga > 0.
+		if d.UnitPrice <= 0 {
+			return nil, nil, domain.Validation(fmt.Sprintf("details[%d].unit_price must be greater than 0", i))
 		}
 		price := d.UnitPrice
 		details = append(details, requestdto.AddTransactionDetailRequest{
