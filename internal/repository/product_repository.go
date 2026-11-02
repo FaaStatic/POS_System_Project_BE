@@ -332,6 +332,7 @@ func decrementStockLines(tx *gorm.DB, lines []stockLine, allowShortage bool) (sh
 	if err != nil {
 		return false, err
 	}
+	changed := make(map[uuid.UUID]*domain.Products, len(locked))
 	for _, l := range lines {
 		product, ok := locked[l.productID]
 		if !ok {
@@ -347,9 +348,10 @@ func decrementStockLines(tx *gorm.DB, lines []stockLine, allowShortage bool) (sh
 			short = true
 		}
 		product.Stock = max(0, roundStock(product.Stock-l.qty))
-		if err := tx.Model(&domain.Products{}).Where("id = ?", l.productID).Update("stock", product.Stock).Error; err != nil {
-			return false, internalErr(fmt.Errorf("failed to update product stock: %w", err))
-		}
+		changed[l.productID] = product
+	}
+	if err := saveStocks(tx, changed); err != nil {
+		return false, internalErr(fmt.Errorf("failed to update product stock: %w", err))
 	}
 	return short, nil
 }
@@ -359,17 +361,39 @@ func incrementStock(tx *gorm.DB, lines []stockLine) error {
 	if err != nil {
 		return err
 	}
+	changed := make(map[uuid.UUID]*domain.Products, len(locked))
 	for _, l := range lines {
 		product, ok := locked[l.productID]
 		if !ok || product.ProductType.IsDigital() {
 			continue
 		}
 		product.Stock = roundStock(product.Stock + l.qty)
-		if err := tx.Unscoped().Model(&domain.Products{}).Where("id = ?", l.productID).Update("stock", product.Stock).Error; err != nil {
-			return internalErr(fmt.Errorf("failed to restore product stock: %w", err))
-		}
+		changed[l.productID] = product
+	}
+	if err := saveStocks(tx, changed); err != nil {
+		return internalErr(fmt.Errorf("failed to restore product stock: %w", err))
 	}
 	return nil
+}
+
+// saveStocks menulis stok akhir semua produk dalam satu statement, bukan satu
+// UPDATE per baris keranjang. Barisnya sudah dikunci lockProductsOrdered dan
+// dibaca utuh dari DB, jadi upsert pada PK selalu jatuh ke DO UPDATE. UpdatedAt
+// diisi manual karena GORM hanya mengisinya saat nol.
+func saveStocks(tx *gorm.DB, changed map[uuid.UUID]*domain.Products) error {
+	if len(changed) == 0 {
+		return nil
+	}
+	now := time.Now()
+	rows := make([]*domain.Products, 0, len(changed))
+	for _, p := range changed {
+		p.UpdatedAt = now
+		rows = append(rows, p)
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"stock", "updated_at"}),
+	}).Create(&rows).Error
 }
 
 func lockProductsOrdered(tx *gorm.DB, lines []stockLine) (map[uuid.UUID]*domain.Products, error) {

@@ -18,6 +18,7 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/helmet"
 	"github.com/gofiber/fiber/v3/middleware/limiter"
 	"github.com/gofiber/fiber/v3/middleware/recover"
+	"github.com/gofiber/fiber/v3/middleware/requestid"
 	"go.uber.org/zap"
 )
 
@@ -49,6 +50,7 @@ func GetFiberConfig(logger *zap.Logger, appName string, trustedProxies []string)
 			}
 			fields := []zap.Field{
 				zap.Error(err),
+				zap.String("request_id", requestid.FromContext(c)),
 				zap.Int("status_code", code),
 				zap.String("path", c.Path()),
 				zap.String("method", c.Method()),
@@ -121,6 +123,10 @@ func GetSwaggerConfig(nameApp string, isDev bool) swagger.Config {
 
 func InitFiber(env string, envData *envconfig.Config, logger *zap.Logger, redisClient fiber.Storage, routes func(router fiber.Router)) *fiber.App {
 	app := fiber.New(GetFiberConfig(logger, envData.App.Name, envData.App.TrustedProxies))
+	// Logger paling luar: ia yang menjalankan ErrorHandler, jadi 429 dari limiter
+	// dan panic yang dipulihkan recover ikut tercatat dengan status aslinya.
+	app.Use(requestid.New())
+	app.Use(middleware.LoggerMiddleware(logger))
 	app.Use(recover.New(recover.Config{
 		EnableStackTrace: true,
 	}))
@@ -128,7 +134,6 @@ func InitFiber(env string, envData *envconfig.Config, logger *zap.Logger, redisC
 	app.Use(compress.New())
 	app.Use(cors.New(middleware.GetCorsConfig(envData.App.CMSOrigins)))
 	app.Use(limiter.New(middleware.GetGlobalLimiter(redisClient)))
-	app.Use(middleware.LoggerMiddleware(logger))
 
 	app.Use(swagger.New(GetSwaggerConfig(envData.App.Name, env != "production")))
 

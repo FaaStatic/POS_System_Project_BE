@@ -59,7 +59,7 @@ docker-env:
 	@rm -f $(SECRETS_DIR)/*
 	@{ echo "APP_ENV=$(APP_ENV)"; awk -v d=$(SECRETS_DIR) ' \
 		BEGIN { y = d "/app.yaml"; printf "" > y; printf "" > (d "/redis.conf"); \
-			n = split("database_pass redis_password jwt_secret midtrans_server_key", req, " "); \
+			n = split("database_pass redis_password jwt_secret midtrans_server_key grafana_admin_password", req, " "); \
 			for (i = 1; i <= n; i++) printf "" > (d "/" req[i]) } \
 		/^[A-Za-z_]+:[ ]*$$/ { sec = toupper(substr($$1, 1, length($$1) - 1)); print > y; next } \
 		/^[^ ]/ { sec = "" } \
@@ -78,6 +78,7 @@ docker-env:
 			printf "%s=\047%s\047\n", name, val; next \
 		} \
 		{ print > y }' $(CONFIG); } > $(SECRETS_DIR)/compose.env
+	@test -s $(SECRETS_DIR)/grafana_admin_password || { echo "grafana.admin_password kosong di $(CONFIG): Grafana akan memakai password bawaan admin"; exit 1; }
 	@chmod 644 $(SECRETS_DIR)/*
 	@echo "APP_ENV=$(APP_ENV): $(CONFIG) -> $(SECRETS_DIR)/"
 
@@ -90,6 +91,9 @@ docker-rebuild: docker-env swagger
 
 docker-down: docker-env
 	$(COMPOSE) down
+
+docker-logs: docker-env
+	$(COMPOSE) logs -f --tail=200 app
 
 docker-config: docker-env
 	@$(COMPOSE) config

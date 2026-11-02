@@ -23,6 +23,24 @@ func likeContains(s string) string {
 // delete) tetap terbaca di riwayat, mis. nama customer pada hutang lama.
 func unscoped(db *gorm.DB) *gorm.DB { return db.Unscoped() }
 
+// hasRowsFor: true bila salah satu tabel milik models punya baris dengan
+// column = id, termasuk baris yang sudah di-soft-delete (riwayat lama tetap
+// merujuk id ini lewat FK). Berhenti di tabel pertama yang cocok.
+// security: column selalu konstanta dari pemanggil, bukan input user.
+func hasRowsFor(tx *gorm.DB, column string, id uuid.UUID, models ...any) (bool, error) {
+	for _, model := range models {
+		var one int
+		res := tx.Unscoped().Model(model).Select("1").Where(column+" = ?", id).Limit(1).Scan(&one)
+		if res.Error != nil {
+			return false, res.Error
+		}
+		if res.RowsAffected > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func pageParams(limit int, order string) (int, string) {
 	if limit <= 0 || limit > 100 {
 		limit = 10

@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"shop_project_be/internal/constant/enum"
@@ -153,11 +152,8 @@ func (c *customerRepository) PurgeCustomer(ctx context.Context, id uuid.UUID, an
 			return domain.Conflict("customer still has an unpaid debt; settle it first")
 		}
 
-		var referenced bool
-		if err := tx.Raw(`SELECT EXISTS (SELECT 1 FROM transactions WHERE customer_id = @id)
-			OR EXISTS (SELECT 1 FROM debts WHERE customer_id = @id)
-			OR EXISTS (SELECT 1 FROM payments WHERE customer_id = @id)`,
-			sql.Named("id", id)).Scan(&referenced).Error; err != nil {
+		referenced, err := hasRowsFor(tx, "customer_id", id, &domain.Transactions{}, &domain.Debts{}, &domain.Payment{})
+		if err != nil {
 			return internalErr(fmt.Errorf("failed to check customer history: %w", err))
 		}
 		anonymized = referenced
