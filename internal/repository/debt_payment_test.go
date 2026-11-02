@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
@@ -188,6 +189,51 @@ func TestPayDebt_RejectsPaymentOnAlreadyLunasDebt(t *testing.T) {
 	_, err := repo.PayDebt(context.Background(), debt.ID, &domain.DebtPayments{UserID: user.ID, NominalBayar: 5000})
 	if err == nil || !strings.Contains(err.Error(), "already been fully paid") {
 		t.Fatalf("expected an already-paid error, got: %v", err)
+	}
+}
+
+func TestGetDebtWithPayments_OldestFirstWithCashier(t *testing.T) {
+	db := openTestDB(t)
+	repo := repository.NewDebtRepository(db)
+
+	customer := &domain.Customers{Name: "Report " + uuid.NewString()}
+	if err := db.Create(customer).Error; err != nil {
+		t.Fatalf("seed customer: %v", err)
+	}
+	debt := &domain.Debts{CustomerID: customer.ID, TotalDebt: 9000, RemainingDebt: 6000, Status: enum.BELUM_LUNAS}
+	if err := db.Create(debt).Error; err != nil {
+		t.Fatalf("seed debt: %v", err)
+	}
+	user := &domain.Users{Username: "cashier-" + uuid.NewString(), Password: "x"}
+	if err := db.Create(user).Error; err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	t.Cleanup(func() {
+		db.Unscoped().Delete(&domain.DebtPayments{}, "debt_id = ?", debt.ID)
+		db.Unscoped().Delete(&domain.Debts{}, "id = ?", debt.ID)
+		db.Unscoped().Delete(&domain.Customers{}, "id = ?", customer.ID)
+		db.Unscoped().Delete(&domain.Users{}, "id = ?", user.ID)
+	})
+
+	now := time.Now()
+	for _, p := range []*domain.DebtPayments{
+		{DebtID: debt.ID, UserID: user.ID, NominalBayar: 2000, TanggalBayar: now},
+		{DebtID: debt.ID, UserID: user.ID, NominalBayar: 1000, TanggalBayar: now.Add(-time.Hour)},
+	} {
+		if err := db.Create(p).Error; err != nil {
+			t.Fatalf("seed payment: %v", err)
+		}
+	}
+
+	got, err := repo.GetDebtWithPayments(context.Background(), debt.ID)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(got.DebtPayments) != 2 || got.DebtPayments[0].NominalBayar != 1000 || got.DebtPayments[1].NominalBayar != 2000 {
+		t.Fatalf("expected payments oldest first [1000 2000], got %+v", got.DebtPayments)
+	}
+	if got.DebtPayments[0].User == nil || got.DebtPayments[0].User.ID != user.ID {
+		t.Fatalf("expected cashier preloaded on payments")
 	}
 }
 

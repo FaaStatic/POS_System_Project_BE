@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/domain"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,16 +28,27 @@ func (d *debtRepository) GetDebtByID(ctx context.Context, id uuid.UUID) (*domain
 	return d.getDebt(ctx, id)
 }
 
+// maxReportPayments: satu hutang berjalan menampung cicilan tanpa batas; laporan
+// cukup memuat yang terbaru. Total dan sisa tetap dari baris debts.
+const maxReportPayments = 500
+
+// GetDebtWithPayments memuat maxReportPayments cicilan terbaru, urut lama ke baru.
 func (d *debtRepository) GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
-	return d.getDebt(ctx, id, "DebtPayments.User")
+	debt, err := d.getDebt(ctx, id, func(q *gorm.DB) *gorm.DB {
+		return q.Preload("DebtPayments", func(db *gorm.DB) *gorm.DB {
+			return db.Order("tanggal_bayar DESC, id DESC").Limit(maxReportPayments)
+		}).Preload("DebtPayments.User")
+	})
+	if err != nil {
+		return nil, err
+	}
+	slices.Reverse(debt.DebtPayments)
+	return debt, nil
 }
 
-func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, preloads ...string) (*domain.Debts, error) {
+func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, scopes ...func(*gorm.DB) *gorm.DB) (*domain.Debts, error) {
 	var debt domain.Debts
-	query := d.db.WithContext(ctx).Preload("Customer", unscoped)
-	for _, p := range preloads {
-		query = query.Preload(p)
-	}
+	query := d.db.WithContext(ctx).Preload("Customer", unscoped).Scopes(scopes...)
 	result := query.Where("id = ?", id).First(&debt)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {

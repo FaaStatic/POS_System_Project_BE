@@ -73,7 +73,7 @@ func (f *fcmUsecase) NotifyPaymentResult(ctx context.Context, userID string, ord
 	}
 
 	if len(invalidTokens) > 0 {
-		f.log.Info("Removing invalid device tokens", zap.Strings("tokens", invalidTokens))
+		f.log.Info("Removing invalid device tokens", zap.Int("count", len(invalidTokens)))
 		if err := f.fcmRepo.DeleteDeviceToken(ctx, invalidTokens); err != nil {
 			f.log.Error("failed to delete invalid device tokens", zap.Error(err))
 		}

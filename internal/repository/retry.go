@@ -23,13 +23,22 @@ func isRetryableTxError(err error) bool {
 func runTxDB(ctx context.Context, db *gorm.DB, fn func(tx *gorm.DB) error) error {
 	var err error
 	for attempt := 0; attempt < maxTxRetries; attempt++ {
-		err = db.WithContext(ctx).Transaction(fn)
+		var fnErr error
+		err = db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			fnErr = fn(tx)
+			return fnErr
+		})
+		// Error dari fn sudah berbentuk error domain; selain itu (BEGIN/COMMIT
+		// gagal) dibungkus supaya teks driver tidak sampai ke response.
+		if err != nil && fnErr == nil {
+			err = internalErr(err)
+		}
 		if err == nil || !isRetryableTxError(err) {
 			return err
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return internalErr(ctx.Err())
 		case <-time.After(txBackoff(attempt)):
 		}
 	}

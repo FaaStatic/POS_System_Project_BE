@@ -43,9 +43,22 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  # vm.overcommit_memory bukan sysctl per-container, jadi diset lewat init
+  # container privileged (di Docker Desktop berlaku untuk VM-nya). Hanya dev:
+  # `--profile dev`; di host Linux/prod set lewat /etc/sysctl.d.
+  redis-sysctl:
+    image: alpine:3.22
+    profiles: ["dev"]
+    privileged: true
+    command: ["sysctl", "-w", "vm.overcommit_memory=1"]
+    restart: "no"
   redis:
     image: redis:8-alpine
     command: ["redis-server", "/run/secrets/redis_conf"]
+    depends_on:
+      redis-sysctl:
+        condition: service_completed_successfully
+        required: false
     secrets:
       - redis_conf
     labels:

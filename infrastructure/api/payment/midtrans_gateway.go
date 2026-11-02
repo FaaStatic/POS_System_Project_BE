@@ -6,7 +6,9 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"strings"
+	"time"
 
 	"shop_project_be/internal/domain"
 
@@ -26,6 +28,12 @@ func NewMidtransGateway(serverKey, environment string) domain.PaymentGateway {
 	}
 	var client coreapi.Client
 	client.New(serverKey, env)
+	// midtrans-go tidak menerima ctx dan timeout bawaannya 80 detik: terlalu lama
+	// untuk request kasir dan untuk sweep reconcile yang memanggil sampai 50 order.
+	client.HttpClient = &midtrans.HttpClientImplementation{
+		HttpClient: &http.Client{Timeout: 20 * time.Second},
+		Logger:     midtrans.GetDefaultLogger(env),
+	}
 	return &midtransGateway{client: client, serverKey: serverKey}
 }
 
