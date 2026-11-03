@@ -130,6 +130,8 @@ func parseOfflineTransaction(userID string, item requestdto.OfflineTransaction, 
 		UserId:      userID,
 		CustomerId:  item.CustomerId,
 		Details:     details,
+		AmountPaid:  item.AmountPaid,
+		Change:      item.Change,
 	}, nil
 }
 

@@ -18,7 +18,7 @@ import (
 )
 
 func roundStock(v float64) float64 {
-	return math.Round(v*100) / 100
+	return math.Round(v*1000) / 1000
 }
 
 var liveSKU = clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "deleted_at IS NULL"}}}
@@ -212,20 +212,37 @@ func (p *productRepository) DeleteProduct(ctx context.Context, id uuid.UUID) err
 	return nil
 }
 
-func (p *productRepository) GetAllProduct(ctx context.Context, filter domain.FilterAllProduct) (*domain.PaginatedItem, error) {
-	limit, order := pageParams(filter.Limit, filter.Order)
-	query := p.db.WithContext(ctx).Model(&domain.Products{}).Preload("Category")
-
+func applyProductFilter(query *gorm.DB, filter domain.FilterAllProduct) *gorm.DB {
 	if filter.CategoryID != nil {
 		query = query.Where("category_id = ?", *filter.CategoryID)
 	}
-
 	if filter.Search != "" {
 		query = query.Where("product_name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
 	}
 	if filter.Barcode != "" {
 		query = query.Where("barcode = ?", filter.Barcode)
 	}
+	return query
+}
+
+func (p *productRepository) ListForExport(ctx context.Context, filter domain.FilterAllProduct, limit, offset int) ([]*domain.Products, int64, error) {
+	query := applyProductFilter(p.db.WithContext(ctx).Model(&domain.Products{}), filter).
+		Where("barcode IS NOT NULL").Session(&gorm.Session{})
+
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to count products for export: %w", err)
+	}
+	var items []*domain.Products
+	if err := query.Order("created_at ASC, id ASC").Limit(limit).Offset(offset).Find(&items).Error; err != nil {
+		return nil, 0, fmt.Errorf("failed to list products for export: %w", err)
+	}
+	return items, total, nil
+}
+
+func (p *productRepository) GetAllProduct(ctx context.Context, filter domain.FilterAllProduct) (*domain.PaginatedItem, error) {
+	limit, order := pageParams(filter.Limit, filter.Order)
+	query := applyProductFilter(p.db.WithContext(ctx).Model(&domain.Products{}).Preload("Category"), filter)
 
 	var items []*domain.Products
 	if err := keysetPage(query, "", limit, order, filter.Cursor).Find(&items).Error; err != nil {
@@ -280,6 +297,10 @@ func (p *productRepository) UpdateProductWithLock(ctx context.Context, id uuid.U
 		}
 
 		if stockDelta != 0 {
+			// Unit dibaca di bawah lock yang sama, jadi tidak perlu pembacaan terpisah.
+			if err := domain.CheckQty(product.Unit, stockDelta); err != nil {
+				return err
+			}
 			newStock := roundStock(product.Stock + stockDelta)
 			if newStock < 0 {
 				return domain.Conflict(fmt.Sprintf("insufficient stock for product %s (current: %v, requested change: %v)", id, product.Stock, stockDelta))

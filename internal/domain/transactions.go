@@ -23,6 +23,11 @@ type Transactions struct {
 	Bank             *string           `gorm:"type:varchar(20)" json:"bank,omitempty"`
 	TotalTransaction int64             `gorm:"type:bigint" json:"total_transaction"`
 
+	// Hanya untuk pembayaran tunai yang mengirim jumlah bayar. Laporan tetap
+	// memakai TotalTransaction; kembalian hanya dicatat.
+	AmountPaid   *int64 `gorm:"type:bigint" json:"amount_paid,omitempty"`
+	ChangeAmount *int64 `gorm:"type:bigint" json:"change_amount,omitempty"`
+
 	// Diisi hanya untuk transaksi offline dari kasir (POST /transactions/sync).
 	ClientRef          *uuid.UUID `gorm:"type:uuid" json:"client_ref,omitempty"`
 	StockConflict      bool       `gorm:"default:false" json:"stock_conflict"`
@@ -36,6 +41,31 @@ type Transactions struct {
 	User              Users                `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	Customer          Customers            `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`
 	TransactionDetail []TransactionsDetail `gorm:"foreignKey:TransactionID" json:"details"`
+	Change            []TransactionChange  `gorm:"foreignKey:TransactionID" json:"change,omitempty"`
+}
+
+const (
+	ChangeCash    = "tunai"
+	ChangeCandy   = "permen"
+	ChangeProduct = "produk_lain"
+)
+
+// TransactionChange: satu bentuk kembalian. Amount adalah nilainya dalam rupiah;
+// untuk permen/produk_lain ProductID terisi dan stok produk ikut berkurang.
+type TransactionChange struct {
+	ID            uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	TransactionID uuid.UUID  `gorm:"type:uuid" json:"transaction_id"`
+	Kind          string     `gorm:"type:varchar(20)" json:"kind"`
+	Amount        int64      `gorm:"type:bigint" json:"amount"`
+	ProductID     *uuid.UUID `gorm:"type:uuid" json:"product_id,omitempty"`
+	ProductName   string     `gorm:"type:varchar(255);default:''" json:"product_name,omitempty"`
+	Qty           float64    `gorm:"type:decimal(12,3);default:0" json:"qty,omitempty"`
+	UnitPrice     int64      `gorm:"type:bigint;default:0" json:"unit_price,omitempty"`
+	PurchasePrice int64      `gorm:"type:bigint;default:0" json:"purchase_price,omitempty"`
+}
+
+func (c *TransactionChange) TableName() string {
+	return "transactions_change"
 }
 
 type TransactionsDetail struct {
@@ -46,7 +76,7 @@ type TransactionsDetail struct {
 	Price         int64     `gorm:"type:bigint" json:"price"`
 	PriceDebt     int64     `gorm:"type:bigint" json:"price_debt"`
 	PurchasePrice int64     `gorm:"type:bigint;default:0" json:"purchase_price"`
-	Qty           float64   `gorm:"type:decimal(8,2)" json:"qty"`
+	Qty           float64   `gorm:"type:decimal(12,3)" json:"qty"`
 	Subtotal      int64     `gorm:"type:bigint" json:"subtotal"`
 	Destination   *string   `gorm:"type:varchar(50)" json:"destination,omitempty"`
 

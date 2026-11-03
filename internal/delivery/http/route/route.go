@@ -53,7 +53,11 @@ func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log
 		products := api.Group("/products")
 		products.Post("", onlySuper, h.Product.Add)
 		products.Post("/bulk", onlySuper, h.Product.AddBulk)
+		// /template didaftarkan sebelum /:id supaya tidak tertangkap sebagai id.
+		products.Get("/template", onlySuper, h.Product.DownloadTemplate)
 		products.Get("", h.Product.List)
+		// /export/barcodes didaftarkan sebelum /:id supaya tidak tertangkap sebagai id.
+		products.Get("/export/barcodes", h.Product.ExportBarcodes)
 		products.Get("/:id", h.Product.Get)
 		// /stock didaftarkan sebelum /:id supaya tidak tertangkap sebagai id.
 		products.Patch("/stock", onlySuper, h.Product.UpdateStock)

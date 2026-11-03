@@ -1,10 +1,13 @@
 package handler
 
 import (
+	"strconv"
+
 	"shop_project_be/internal/delivery/http/middleware"
 	"shop_project_be/internal/domain"
 	requestdto "shop_project_be/internal/dto/request_dto"
 	"shop_project_be/pkg/response"
+	"shop_project_be/pkg/sheet"
 
 	"github.com/gofiber/fiber/v3"
 	"go.uber.org/zap"
@@ -130,6 +133,64 @@ func (h *ProductHandler) List(c fiber.Ctx) error {
 		return writeError(c, fiber.StatusInternalServerError, err)
 	}
 	return response.Success(c, fiber.StatusOK, "products fetched", products)
+}
+
+const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+// DownloadTemplate godoc
+//
+//	@Summary		Download the product import template (Excel)
+//	@Description	Downloads an .xlsx template for POST /api/products/bulk. The sku, barcode and image columns may be left empty: they are generated on import. A picture inserted in a cell of the image column (Insert > Pictures, Place in Cell or Place Over Cells) is converted automatically to a square 1:1 WebP under 500 KB and stored as base64. Unit and product_type have drop-down lists, and the Petunjuk sheet explains every column.
+//	@Tags			Products
+//	@Produce		application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+//	@Security		BearerAuth
+//	@Success		200
+//	@Failure		500	{object}	response.APIResponse
+//	@Router			/api/products/template [get]
+func (h *ProductHandler) DownloadTemplate(c fiber.Ctx) error {
+	data, err := sheet.WriteProductTemplate()
+	if err != nil {
+		h.log.Error("failed to build product template", zap.Error(err))
+		return response.Error(c, fiber.StatusInternalServerError, "failed to build template", err)
+	}
+	c.Set(fiber.HeaderContentType, xlsxContentType)
+	c.Attachment("template-produk.xlsx")
+	return c.Send(data)
+}
+
+// ExportBarcodes godoc
+//
+//	@Summary		Export product barcodes to Excel
+//	@Description	Downloads an .xlsx of product names with Code128 barcode images, for printing and sticking on products. Uses the same search and category filters as the list; with no filter every product is exported. Each file holds at most 500 products: read X-Total-Parts and call again with part=2, 3, ... to download the rest.
+//	@Tags			Products
+//	@Produce		application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+//	@Security		BearerAuth
+//	@Param			category_id	query	string	false	"Filter category ID"
+//	@Param			search		query	string	false	"Search by product name"
+//	@Param			part		query	int		false	"File part, starting at 1 (default 1)"
+//	@Success		200
+//	@Header			200	{integer}	X-Total-Parts	"Number of files for this filter"
+//	@Header			200	{integer}	X-Total-Items	"Number of products matching this filter"
+//	@Failure		400	{object}	response.APIResponse
+//	@Failure		500	{object}	response.APIResponse
+//	@Router			/api/products/export/barcodes [get]
+func (h *ProductHandler) ExportBarcodes(c fiber.Ctx) error {
+	var req requestdto.ExportBarcodes
+	if err := bindQuery(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	export, err := h.usecase.ExportBarcodes(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	c.Set("X-Total-Parts", strconv.Itoa(export.TotalParts))
+	c.Set("X-Total-Items", strconv.Itoa(export.TotalItems))
+	c.Set(fiber.HeaderContentType, xlsxContentType)
+	c.Attachment(export.Name)
+	return c.Send(export.File)
 }
 
 // Update godoc

@@ -34,10 +34,18 @@ func (t *transactionRepository) CheckTransactionByNoInvoice(ctx context.Context,
 	return &item, nil
 }
 
-func detailLines(details []domain.TransactionsDetail) []stockLine {
-	lines := make([]stockLine, 0, len(details))
-	for _, d := range details {
+// trxStockLines: barang yang keluar dari stok oleh transaksi ini, termasuk produk
+// yang diberikan sebagai kembalian. Produk yang sama di dua tempat dikurangi
+// berurutan oleh decrementStockLines, jadi kekurangan stok tetap terdeteksi.
+func trxStockLines(trx *domain.Transactions) []stockLine {
+	lines := make([]stockLine, 0, len(trx.TransactionDetail)+len(trx.Change))
+	for _, d := range trx.TransactionDetail {
 		lines = append(lines, stockLine{productID: d.ProductID, qty: d.Qty})
+	}
+	for _, c := range trx.Change {
+		if c.ProductID != nil {
+			lines = append(lines, stockLine{productID: *c.ProductID, qty: c.Qty})
+		}
 	}
 	return lines
 }
@@ -46,7 +54,7 @@ func (t *transactionRepository) CreateTransaction(ctx context.Context, transacti
 	var debtSnapshot *domain.TransactionDebtSnapshot
 	err := runTxDB(ctx, t.db, func(tx *gorm.DB) error {
 		if deductStock {
-			short, err := decrementStockLines(tx, detailLines(transaction.TransactionDetail), transaction.ClientRef != nil)
+			short, err := decrementStockLines(tx, trxStockLines(transaction), transaction.ClientRef != nil)
 			if err != nil {
 				return err
 			}
@@ -120,7 +128,7 @@ func (t *transactionRepository) CreateTransaction(ctx context.Context, transacti
 func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.UUID, reason string) error {
 	return runTxDB(ctx, t.db, func(tx *gorm.DB) error {
 		var trx domain.Transactions
-		if err := tx.Preload("TransactionDetail").Where("id = ?", id).First(&trx).Error; err != nil {
+		if err := tx.Preload("TransactionDetail").Preload("Change").Where("id = ?", id).First(&trx).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return domain.NotFound(fmt.Sprintf("transaction with id %s not found", id))
 			}
@@ -131,7 +139,7 @@ func (t *transactionRepository) DeleteTransaction(ctx context.Context, id uuid.U
 			return err
 		}
 
-		if err := incrementStock(tx, detailLines(trx.TransactionDetail)); err != nil {
+		if err := incrementStock(tx, trxStockLines(&trx)); err != nil {
 			return err
 		}
 
@@ -207,7 +215,7 @@ func assertTransactionDeletable(tx *gorm.DB, trx *domain.Transactions) error {
 func (t *transactionRepository) GetAllTransaction(ctx context.Context, filter domain.FilterTransaction) (*domain.ResultTransaction, error) {
 	limit, order := pageParams(filter.Limit, filter.Order)
 
-	query := t.db.WithContext(ctx).Model(&domain.Transactions{}).Preload("TransactionDetail")
+	query := t.db.WithContext(ctx).Model(&domain.Transactions{}).Preload("TransactionDetail").Preload("Change")
 
 	if filter.CustomerID != nil {
 		query = query.Where("customer_id = ?", *filter.CustomerID)
@@ -374,7 +382,7 @@ func (t *transactionRepository) GetTransactionByID(ctx context.Context, id uuid.
 	// Kasir/customer yang sudah dinonaktifkan tetap tampil di detail dan struk lama.
 	result := t.db.WithContext(ctx).Preload("User", unscoped).
 		Preload("Customer", unscoped).
-		Preload("TransactionDetail").Where("id = ?", id).First(&item)
+		Preload("TransactionDetail").Preload("Change").Where("id = ?", id).First(&item)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, domain.NotFound(fmt.Sprintf("transaction with id %s not found", id))

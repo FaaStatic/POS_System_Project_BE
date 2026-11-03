@@ -68,6 +68,28 @@ func TestGenerateTransactionReport(t *testing.T) {
 	assertFileExists(t, url)
 }
 
+func TestGenerateTransactionReportWithChange(t *testing.T) {
+	url, err := GenerateTransactionReport(TransactionReportData{
+		NoInvoice:   "INV-002",
+		Cashier:     "admin",
+		PaymentType: "tunai",
+		CreatedAt:   time.Now(),
+		Items:       []TransactionReportItem{{ProductName: "Beras", Qty: 2.5, Price: 16000, Subtotal: 40000}},
+		Total:       40000,
+		AmountPaid:  50000, ChangeAmount: 10000,
+		Change: []TransactionReportChange{
+			{Kind: "tunai", Amount: 5000},
+			{Kind: "permen", ProductName: "Permen Kopiko", Qty: 4, Amount: 2000},
+			{Kind: "produk_lain", ProductName: "Gula", Qty: 0.25, Amount: 3000},
+		},
+		GeneratedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("GenerateTransactionReport error: %v", err)
+	}
+	assertFileExists(t, url)
+}
+
 func TestGenerateDebtReport(t *testing.T) {
 	url, err := GenerateDebtReport(DebtReportData{
 		DebtID:          "DEBT-001",

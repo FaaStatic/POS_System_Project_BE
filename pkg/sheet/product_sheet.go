@@ -22,7 +22,10 @@ type ProductRow struct {
 	Stock            float64
 	Category         string
 	Image            string
-	ProductType      string
+	// ImageFile: gambar yang ditempel di atas sel kolom image (hanya .xlsx), mentah
+	// dalam format aslinya. Didahulukan dari teks di sel Image.
+	ImageFile   []byte
+	ProductType string
 }
 
 type RowError struct {
@@ -30,7 +33,8 @@ type RowError struct {
 	Message string
 }
 
-var requiredHeaders = []string{"sku", "product_name", "purchase_price", "selling_price", "selling_price_debt"}
+// sku, barcode, dan image sengaja tidak wajib: bila kosong dibuat otomatis.
+var requiredHeaders = []string{"product_name", "purchase_price", "selling_price", "selling_price_debt"}
 
 const maxImportRows = 10000
 
@@ -44,11 +48,15 @@ func ParseProducts(r io.Reader, filename string) ([]ProductRow, []RowError, erro
 	case strings.HasSuffix(ext, ".csv"):
 		return parseRecords(readCSV(r))
 	case strings.HasSuffix(ext, ".xlsx"):
-		records, err := readXLSX(r)
+		records, pictures, err := readXLSX(r)
 		if err != nil {
 			return nil, nil, err
 		}
-		return parseRecords(records, nil)
+		rows, rowErrors, err := parseRecords(records, nil)
+		for i := range rows {
+			rows[i].ImageFile = pictures[rows[i].Line]
+		}
+		return rows, rowErrors, err
 	default:
 		return nil, nil, fmt.Errorf("unsupported file format (use .csv or .xlsx)")
 	}
@@ -74,38 +82,85 @@ func readCSV(r io.Reader) ([][]string, error) {
 	}
 }
 
-func readXLSX(r io.Reader) ([][]string, error) {
+func readXLSX(r io.Reader) ([][]string, map[int][]byte, error) {
 	f, err := excelize.OpenReader(r, xlsxLimits)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read excel: %w", err)
+		return nil, nil, fmt.Errorf("failed to read excel: %w", err)
 	}
 	defer f.Close()
 
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
-		return nil, fmt.Errorf("excel file has no sheet")
+		return nil, nil, fmt.Errorf("excel file has no sheet")
 	}
 	rows, err := f.Rows(sheets[0])
 	if err != nil {
-		return nil, fmt.Errorf("failed to read excel rows: %w", err)
+		return nil, nil, fmt.Errorf("failed to read excel rows: %w", err)
 	}
 	defer rows.Close()
 
+	// Rows juga mengeluarkan baris kosong di antara baris berisi, jadi indeks
+	// records selalu sama dengan nomor baris Excel (dipakai untuk mencocokkan gambar).
 	var records [][]string
 	for rows.Next() {
 		if len(records) > maxImportRows {
-			return nil, errTooManyRows
+			return nil, nil, errTooManyRows
 		}
 		cols, err := rows.Columns()
 		if err != nil {
-			return nil, fmt.Errorf("failed to read excel rows: %w", err)
+			return nil, nil, fmt.Errorf("failed to read excel rows: %w", err)
 		}
 		records = append(records, cols)
 	}
 	if err := rows.Error(); err != nil {
-		return nil, fmt.Errorf("failed to read excel rows: %w", err)
+		return nil, nil, fmt.Errorf("failed to read excel rows: %w", err)
 	}
-	return records, nil
+	pictures, err := readPictures(f, sheets[0], records)
+	if err != nil {
+		return nil, nil, err
+	}
+	return records, pictures, nil
+}
+
+// readPictures mengambil gambar yang ditempel "di atas sel" pada kolom image,
+// dikunci dengan nomor baris Excel. Gambar di kolom lain diabaikan supaya logo atau
+// hiasan di sheet tidak menempel ke produk. Dua gambar di sel yang sama: yang
+// pertama dipakai.
+func readPictures(f *excelize.File, sheet string, records [][]string) (map[int][]byte, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+	imageCol := -1
+	for i, h := range records[0] {
+		if normalizeHeader(h) == "image" {
+			imageCol = i + 1
+		}
+	}
+	if imageCol < 0 {
+		return nil, nil
+	}
+	cells, err := f.GetPictureCells(sheet)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read pictures: %w", err)
+	}
+	pictures := make(map[int][]byte)
+	for _, cell := range cells {
+		col, row, err := excelize.CellNameToCoordinates(cell)
+		if err != nil || col != imageCol || row < 2 {
+			continue
+		}
+		if _, taken := pictures[row]; taken {
+			continue
+		}
+		found, err := f.GetPictures(sheet, cell)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read picture at %s: %w", cell, err)
+		}
+		if len(found) > 0 {
+			pictures[row] = found[0].File
+		}
+	}
+	return pictures, nil
 }
 
 func parseRecords(records [][]string, err error) ([]ProductRow, []RowError, error) {
@@ -126,12 +181,26 @@ func parseRecords(records [][]string, err error) ([]ProductRow, []RowError, erro
 		}
 	}
 
+	// Sel sku, barcode, dan image berisi placeholder template atau kode galat Excel
+	// ("#VALUE!" dari gambar tertanam sel) dianggap kosong.
+	var autoCols []int
+	for key := range autoColumns {
+		if idx, ok := colIndex[key]; ok {
+			autoCols = append(autoCols, idx)
+		}
+	}
+
 	var rows []ProductRow
 	var rowErrors []RowError
 
 	for i := 1; i < len(records); i++ {
 		line := i + 1
 		rec := records[i]
+		for _, idx := range autoCols {
+			if idx < len(rec) && isAutoPlaceholder(rec[idx]) {
+				rec[idx] = ""
+			}
+		}
 		if isEmptyRecord(rec) {
 			continue
 		}
@@ -155,10 +224,6 @@ func parseRecords(records [][]string, err error) ([]ProductRow, []RowError, erro
 			ProductType: get("product_type"),
 		}
 
-		if row.SKU == "" {
-			rowErrors = append(rowErrors, RowError{Line: line, Message: "sku is empty"})
-			continue
-		}
 		if row.ProductName == "" {
 			rowErrors = append(rowErrors, RowError{Line: line, Message: "product_name is empty"})
 			continue
@@ -202,6 +267,16 @@ func isEmptyRecord(rec []string) bool {
 		}
 	}
 	return true
+}
+
+// excelPictureCellValue: nilai yang disimpan Excel di sel berisi gambar "Place in
+// Cell"; gambarnya sendiri dibaca terpisah oleh readPictures.
+const excelPictureCellValue = "#VALUE!"
+
+// isAutoPlaceholder: placeholder template atau nilai sel gambar tertanam di kolom otomatis.
+func isAutoPlaceholder(v string) bool {
+	v = strings.TrimSpace(v)
+	return strings.EqualFold(v, autoPlaceholder) || v == excelPictureCellValue
 }
 
 func parseNonNegativeFloat(s string) (float64, error) {

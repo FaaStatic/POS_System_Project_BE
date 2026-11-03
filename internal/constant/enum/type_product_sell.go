@@ -35,6 +35,9 @@ func (u ProductUnit) String() string {
 	}
 }
 
+// IsWhole: hanya pcs yang tidak boleh dijual atau distok dalam pecahan.
+func (u ProductUnit) IsWhole() bool { return u == pcs }
+
 func ParseProductUnit(s string) (ProductUnit, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "pcs", "0":

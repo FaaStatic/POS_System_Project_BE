@@ -3,6 +3,7 @@ package pdf
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -68,6 +69,15 @@ type TransactionReportItem struct {
 	Subtotal    int64
 }
 
+// TransactionReportChange: satu bentuk kembalian di struk (Kind: tunai, permen,
+// produk_lain). ProductName dan Qty hanya terisi untuk barang.
+type TransactionReportChange struct {
+	Kind        string
+	ProductName string
+	Qty         float64
+	Amount      int64
+}
+
 type TransactionReportData struct {
 	StoreName   string
 	NoInvoice   string
@@ -77,7 +87,12 @@ type TransactionReportData struct {
 	CreatedAt   time.Time
 	Items       []TransactionReportItem
 	Total       int64
-	GeneratedAt time.Time
+	// AmountPaid nol berarti kasir tidak mengirim jumlah bayar: baris Dibayar dan
+	// Kembalian tidak dicetak.
+	AmountPaid   int64
+	ChangeAmount int64
+	Change       []TransactionReportChange
+	GeneratedAt  time.Time
 }
 
 func GenerateMonthReport(data MonthReportData) (string, error) {
@@ -242,6 +257,13 @@ func GenerateMonthReport(data MonthReportData) (string, error) {
 	return saveDocument(pdf, fmt.Sprintf("laporan-bulanan-%04d-%02d", data.Year, data.Month))
 }
 
+func changeLabel(c TransactionReportChange) string {
+	if c.Kind == "tunai" {
+		return "- Uang tunai"
+	}
+	return fmt.Sprintf("- %s %s x %s", titleCase(strings.ReplaceAll(c.Kind, "_", " ")), truncate(c.ProductName, 30), formatQty(c.Qty))
+}
+
 func GenerateTransactionReport(data TransactionReportData) (string, error) {
 	pdf := newDocument()
 	pdf.AddPage()
@@ -296,6 +318,19 @@ func GenerateTransactionReport(data TransactionReportData) (string, error) {
 	pdf.SetFont("Arial", "B", 11)
 	pdf.CellFormat(135, 9, "TOTAL", "1", 0, "R", false, 0, "")
 	pdf.CellFormat(45, 9, FormatRupiah(data.Total), "1", 1, "R", false, 0, "")
+
+	if data.AmountPaid > 0 {
+		pdf.SetFont("Arial", "", 10)
+		pdf.CellFormat(135, 7, "Dibayar", "", 0, "R", false, 0, "")
+		pdf.CellFormat(45, 7, FormatRupiah(data.AmountPaid), "", 1, "R", false, 0, "")
+		pdf.CellFormat(135, 7, "Kembalian", "", 0, "R", false, 0, "")
+		pdf.CellFormat(45, 7, FormatRupiah(data.ChangeAmount), "", 1, "R", false, 0, "")
+		pdf.SetFont("Arial", "I", 9)
+		for _, c := range data.Change {
+			pdf.CellFormat(135, 6, changeLabel(c), "", 0, "R", false, 0, "")
+			pdf.CellFormat(45, 6, FormatRupiah(c.Amount), "", 1, "R", false, 0, "")
+		}
+	}
 
 	pdf.Ln(12)
 	pdf.SetFont("Arial", "I", 10)
