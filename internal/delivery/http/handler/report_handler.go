@@ -20,7 +20,7 @@ import (
 //	@Success		200
 //	@Failure		403	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/reports/{file} [get]
+//	@Router			/api/v1/insight/reports/{file} [get]
 func DownloadReport(c fiber.Ctx) error {
 	name := c.Params("file")
 	if !isSuperadmin(c) && !strings.HasPrefix(name, "struk-") {

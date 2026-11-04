@@ -181,6 +181,22 @@ func TestParseProducts_ProductTypeColumn(t *testing.T) {
 	}
 }
 
+func TestParseProductsRejectsNonFiniteNumbers(t *testing.T) {
+	csvData := `sku,product_name,purchase_price,selling_price,selling_price_debt,stock
+A,Nan stock,1000,2000,2100,NaN
+B,Inf stock,1000,2000,2100,Inf
+C,Inf price,Inf,2000,2100,1
+D,Ok,1000,2000,2100,1`
+
+	rows, rowErrors, err := ParseProducts(strings.NewReader(csvData), "p.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].SKU != "D" || len(rowErrors) != 3 {
+		t.Fatalf("rows = %+v, errors = %+v; want only D accepted and 3 row errors", rows, rowErrors)
+	}
+}
+
 func TestParseProductsMissingHeader(t *testing.T) {
 	csvData := "sku,product_name,purchase_price\nSKU-1,Beras,60000"
 	_, _, err := ParseProducts(strings.NewReader(csvData), "p.csv")

@@ -33,7 +33,7 @@ func NewPaymentHandler(usecase domain.PaymentUsecase, log *zap.Logger) *PaymentH
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/payments/qris [post]
+//	@Router			/api/v1/sales/payments/qris [post]
 func (h *PaymentHandler) ChargeQris(c fiber.Ctx) error {
 	var req requestdto.ChargeQrisRequest
 	if err := bindBody(c, &req); err != nil {
@@ -62,7 +62,7 @@ func (h *PaymentHandler) ChargeQris(c fiber.Ctx) error {
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/payments/va [post]
+//	@Router			/api/v1/sales/payments/va [post]
 func (h *PaymentHandler) ChargeVA(c fiber.Ctx) error {
 	var req requestdto.ChargeVARequest
 	if err := bindBody(c, &req); err != nil {
@@ -90,7 +90,7 @@ func (h *PaymentHandler) ChargeVA(c fiber.Ctx) error {
 //	@Success		200			{object}	response.APIResponse
 //	@Failure		403			{object}	response.APIResponse
 //	@Failure		404			{object}	response.APIResponse
-//	@Router			/api/payments/{order_id}/status [get]
+//	@Router			/api/v1/sales/payments/{order_id}/status [get]
 func (h *PaymentHandler) Status(c fiber.Ctx) error {
 	orderID := c.Params("order_id")
 	role, _ := c.Locals("role").(string)
@@ -112,7 +112,7 @@ func (h *PaymentHandler) Status(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		403		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/payments/notification [post]
+//	@Router			/api/v1/sales/payments/notification [post]
 func (h *PaymentHandler) Notification(c fiber.Ctx) error {
 	var req requestdto.MidtransNotificationRequest
 	if err := bindBody(c, &req); err != nil {
@@ -140,7 +140,7 @@ func (h *PaymentHandler) Notification(c fiber.Ctx) error {
 //	@Param			date_end	query		string	false	"YYYY-MM-DD"
 //	@Param			limit		query		int		false	"1-100"
 //	@Success		200			{object}	response.APIResponse
-//	@Router			/api/payments [get]
+//	@Router			/api/v1/sales/payments [get]
 func (h *PaymentHandler) List(c fiber.Ctx) error {
 	var req requestdto.ListPaymentsRequest
 	if err := bindQuery(c, &req); err != nil {

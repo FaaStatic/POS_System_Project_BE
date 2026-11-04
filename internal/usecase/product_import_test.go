@@ -8,6 +8,7 @@ import (
 	"image/png"
 	"mime/multipart"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,6 +20,48 @@ import (
 	"github.com/gen2brain/webp"
 	"github.com/xuri/excelize/v2"
 )
+
+func TestConvertRowImages_DedupesIdenticalImages(t *testing.T) {
+	shot := gradientPNG(t, 64, 64)
+	rows := []sheet.ProductRow{
+		{ImageFile: shot},
+		{ImageFile: shot},
+		{},
+		{Image: "https://cdn.example.com/a.png"},
+		{Image: "https://cdn.example.com/a.png"},
+	}
+	got, err := convertRowImages(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].err != nil || got[0].value == "" || got[1] != got[0] {
+		t.Errorf("identical pictures must share one result, got %+v and %+v", got[0], got[1])
+	}
+	if got[2] != (rowImageResult{}) {
+		t.Errorf("a row without image must stay empty, got %+v", got[2])
+	}
+	if got[3].value != "https://cdn.example.com/a.png" || got[4] != got[3] {
+		t.Errorf("identical text must share one result, got %+v and %+v", got[3], got[4])
+	}
+}
+
+func TestConvertRowImages_CapsDistinctImages(t *testing.T) {
+	rows := make([]sheet.ProductRow, maxImportImages+1)
+	for i := range rows {
+		rows[i].Image = "https://cdn.example.com/" + strconv.Itoa(i) + ".png"
+	}
+	if _, err := convertRowImages(rows); err == nil {
+		t.Fatalf("%d distinct images must be rejected", len(rows))
+	}
+
+	// Gambar yang sama berulang tidak menambah hitungan.
+	for i := range rows {
+		rows[i].Image = "https://cdn.example.com/same.png"
+	}
+	if _, err := convertRowImages(rows); err != nil {
+		t.Fatalf("repeated image must not count against the cap: %v", err)
+	}
+}
 
 func TestAutoSKUPrefix(t *testing.T) {
 	for in, want := range map[string]string{

@@ -15,9 +15,9 @@ import (
 func TestDownloadTemplate(t *testing.T) {
 	app := fiber.New()
 	h := NewProductHandler(nil, zap.NewNop()) // template tidak memakai usecase
-	app.Get("/api/products/template", h.DownloadTemplate)
+	app.Get("/api/v1/catalog/products/template", h.DownloadTemplate)
 
-	resp, err := app.Test(httptest.NewRequest("GET", "/api/products/template", nil))
+	resp, err := app.Test(httptest.NewRequest("GET", "/api/v1/catalog/products/template", nil))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -40,7 +40,7 @@ type DebtPayments struct {
 	User *Users `gorm:"foreignKey:UserID" json:"user,omitempty"`
 }
 
-// DebtAdjustments mencatat hutang manual (POST /api/debts) yang tidak punya
+// DebtAdjustments mencatat hutang manual (POST /api/v1/sales/debts) yang tidak punya
 // transaksi: siapa input, berapa, kapan.
 type DebtAdjustments struct {
 	ID        uuid.UUID `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`

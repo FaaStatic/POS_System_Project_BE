@@ -23,7 +23,7 @@ func NewDebtRepository(db *gorm.DB) domain.DebtRepository {
 }
 
 // GetDebtByID tidak preload Transactions: satu hutang berjalan menampung
-// transaksi tanpa batas. Ambil lewat GET /api/customers/:id/transactions.
+// transaksi tanpa batas. Ambil lewat GET /api/v1/sales/customers/:id/transactions.
 func (d *debtRepository) GetDebtByID(ctx context.Context, id uuid.UUID) (*domain.Debts, error) {
 	return d.getDebt(ctx, id)
 }
@@ -197,7 +197,7 @@ func (d *debtRepository) GetAllDebt(ctx context.Context, filter domain.FilterDeb
 
 	// Transaksi tidak di-preload: satu hutang terbuka terus menampung transaksi
 	// hutang customer, jadi jumlahnya tak terbatas. Ambil per customer lewat
-	// GET /api/customers/:id/transactions (berhalaman).
+	// GET /api/v1/sales/customers/:id/transactions (berhalaman).
 	query := d.db.WithContext(ctx).Preload("Customer", unscoped).Model(&domain.Debts{})
 
 	if filter.Search != "" {

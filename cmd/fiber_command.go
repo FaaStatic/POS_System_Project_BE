@@ -13,12 +13,14 @@ import (
 	"shop_project_be/infrastructure/database"
 	"shop_project_be/infrastructure/fcm"
 	loggerconfig "shop_project_be/infrastructure/logger"
+	"shop_project_be/internal/constant/apipath"
 	"shop_project_be/internal/delivery/http/handler"
 	"shop_project_be/internal/delivery/http/middleware"
 	"shop_project_be/internal/delivery/http/route"
 	"shop_project_be/internal/repository"
 	"shop_project_be/internal/usecase"
 	"shop_project_be/pkg/jwt"
+	"shop_project_be/pkg/pdf"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -64,7 +66,13 @@ var serverRun = &cobra.Command{
 		jwtService := jwt.NewJWTService(envConf.JWT.Secret,
 			time.Duration(envConf.JWT.AccessTokenTTL)*time.Second,
 			time.Duration(envConf.JWT.RefreshTokenTTL)*time.Second)
-		midtransGateway := payment.NewMidtransGateway(envConf.Midtrans.ServerKey, envConf.Midtrans.Environment)
+		apiVersion := envConf.App.APIVersion
+		pdf.SetURLPrefix(apipath.ReportsPrefix(apiVersion))
+		var notificationURL string
+		if envConf.Midtrans.Configured() {
+			notificationURL = envConf.App.PublicURL + apipath.NotificationPath(apiVersion)
+		}
+		midtransGateway := payment.NewMidtransGateway(envConf.Midtrans.ServerKey, envConf.Midtrans.Environment, notificationURL)
 		sender, err := fcm.NewSender(ctxBg, envConf.FirebaseStr.GOOGLE_APPLICATION_CREDENTIALS)
 
 		if err != nil {
@@ -117,7 +125,7 @@ var serverRun = &cobra.Command{
 		}
 		jwtMw := middleware.NewJwtMiddleware(jwtService, sessionRepo)
 		storage := cache.NewLimiterStorage(redisClient)
-		app := fiberconfig.InitFiber(env, envConf, loggerconfig.Logger, storage, route.New(handlers, jwtMw, storage, loggerconfig.Logger, envConf.Midtrans.Configured()))
+		app := fiberconfig.InitFiber(env, envConf, loggerconfig.Logger, storage, route.New(handlers, jwtMw, storage, loggerconfig.Logger, envConf.Midtrans.Configured(), apiVersion))
 
 		loggerconfig.Logger.Info("server starting",
 			zap.String("app", envConf.App.Name),

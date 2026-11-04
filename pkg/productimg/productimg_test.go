@@ -153,6 +153,48 @@ func TestFromBytesRejects(t *testing.T) {
 	}
 }
 
+func TestFromBytesRejectsCorruptWebP(t *testing.T) {
+	var square bytes.Buffer
+	if err := webp.Encode(&square, image.NewRGBA(image.Rect(0, 0, 200, 200)), webp.Options{Quality: 60}); err != nil {
+		t.Fatal(err)
+	}
+	// Header utuh tapi badan terpotong: lolos DecodeConfig, tapi bukan gambar yang bisa dipakai.
+	if _, err := FromBytes(square.Bytes()[:40]); err == nil {
+		t.Fatal("a truncated WebP must not be stored as is")
+	}
+}
+
+func TestFromTextLimitsAndLooseInput(t *testing.T) {
+	raw := pngBytes(t, 200, 100, 255)
+	b64 := base64.StdEncoding.EncodeToString(raw)
+	unpadded := strings.TrimRight(b64, "=")
+
+	got, err := FromText(unpadded)
+	if err != nil {
+		t.Fatalf("base64 without padding: %v", err)
+	}
+	decodeResult(t, got, 100)
+
+	// Nama pendek yang kebetulan base64 sah bukan gambar.
+	for _, name := range []string{"gula", "kopi", "teh1"} {
+		if got, err := FromText(name); err != nil || got != name {
+			t.Errorf("FromText(%q) = %q, %v; want it kept as text", name, got, err)
+		}
+	}
+
+	for name, in := range map[string]string{
+		"long url":         "https://cdn.example.com/" + strings.Repeat("a", maxImageRef),
+		"long non-base64":  strings.Repeat("a.", maxImageRef),
+		"oversized base64": strings.Repeat("A", maxImageText+4),
+	} {
+		t.Run("rejects "+name, func(t *testing.T) {
+			if _, err := FromText(in); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
 func TestFromText(t *testing.T) {
 	raw := pngBytes(t, 200, 100, 255)
 	b64 := base64.StdEncoding.EncodeToString(raw)

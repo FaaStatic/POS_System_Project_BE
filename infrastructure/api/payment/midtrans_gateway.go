@@ -21,13 +21,19 @@ type midtransGateway struct {
 	serverKey string
 }
 
-func NewMidtransGateway(serverKey, environment string) domain.PaymentGateway {
+// NewMidtransGateway: notificationURL, bila diisi, dikirim di setiap request lewat
+// header X-Override-Notification sehingga webhook mengikuti versi API tanpa mengubah
+// URL di dashboard Midtrans. Kosong = pakai URL dashboard.
+func NewMidtransGateway(serverKey, environment, notificationURL string) domain.PaymentGateway {
 	env := midtrans.Sandbox
 	if strings.EqualFold(environment, "production") {
 		env = midtrans.Production
 	}
 	var client coreapi.Client
 	client.New(serverKey, env)
+	if notificationURL != "" {
+		client.Options.SetPaymentOverrideNotification(notificationURL)
+	}
 	// midtrans-go tidak menerima ctx dan timeout bawaannya 80 detik: terlalu lama
 	// untuk request kasir dan untuk sweep reconcile yang memanggil sampai 50 order.
 	client.HttpClient = &midtrans.HttpClientImplementation{

@@ -34,7 +34,7 @@ func NewProductHandler(usecase domain.ProductUsecase, log *zap.Logger) *ProductH
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/products [post]
+//	@Router			/api/v1/catalog/products [post]
 func (h *ProductHandler) Add(c fiber.Ctx) error {
 	var req requestdto.AddProduct
 	if err := bindBody(c, &req); err != nil {
@@ -61,7 +61,7 @@ func (h *ProductHandler) Add(c fiber.Ctx) error {
 //	@Success		201			{object}	response.APIResponse	"Some rows imported; data is the per-row report"
 //	@Success		200			{object}	response.APIResponse	"Nothing imported; data says why"
 //	@Failure		400			{object}	response.APIResponse
-//	@Router			/api/products/bulk [post]
+//	@Router			/api/v1/catalog/products/bulk [post]
 func (h *ProductHandler) AddBulk(c fiber.Ctx) error {
 	fileHeader, err := c.FormFile("file_upload")
 	if err != nil {
@@ -88,7 +88,7 @@ func (h *ProductHandler) AddBulk(c fiber.Ctx) error {
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/products/{id} [get]
+//	@Router			/api/v1/catalog/products/{id} [get]
 func (h *ProductHandler) Get(c fiber.Ctx) error {
 	req := requestdto.GetProduct{ID: c.Params("id")}
 	if err := validate.Struct(&req); err != nil {
@@ -118,7 +118,7 @@ func (h *ProductHandler) Get(c fiber.Ctx) error {
 //	@Success		200			{object}	response.APIResponse
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/api/products [get]
+//	@Router			/api/v1/catalog/products [get]
 func (h *ProductHandler) List(c fiber.Ctx) error {
 	var req requestdto.GetAllProduct
 	if err := bindQuery(c, &req); err != nil {
@@ -140,13 +140,13 @@ const xlsxContentType = "application/vnd.openxmlformats-officedocument.spreadshe
 // DownloadTemplate godoc
 //
 //	@Summary		Download the product import template (Excel)
-//	@Description	Downloads an .xlsx template for POST /api/products/bulk. The sku, barcode and image columns may be left empty: they are generated on import. A picture inserted in a cell of the image column (Insert > Pictures, Place in Cell or Place Over Cells) is converted automatically to a square 1:1 WebP under 500 KB and stored as base64. Unit and product_type have drop-down lists, and the Petunjuk sheet explains every column.
+//	@Description	Downloads an .xlsx template for POST /api/v1/catalog/products/bulk. The sku, barcode and image columns may be left empty: they are generated on import. A picture inserted in a cell of the image column (Insert > Pictures, Place in Cell or Place Over Cells) is converted automatically to a square 1:1 WebP under 500 KB and stored as base64. Unit and product_type have drop-down lists, and the Petunjuk sheet explains every column.
 //	@Tags			Products
 //	@Produce		application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 //	@Security		BearerAuth
 //	@Success		200
 //	@Failure		500	{object}	response.APIResponse
-//	@Router			/api/products/template [get]
+//	@Router			/api/v1/catalog/products/template [get]
 func (h *ProductHandler) DownloadTemplate(c fiber.Ctx) error {
 	data, err := sheet.WriteProductTemplate()
 	if err != nil {
@@ -173,7 +173,7 @@ func (h *ProductHandler) DownloadTemplate(c fiber.Ctx) error {
 //	@Header			200	{integer}	X-Total-Items	"Number of products matching this filter"
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		500	{object}	response.APIResponse
-//	@Router			/api/products/export/barcodes [get]
+//	@Router			/api/v1/catalog/products/export/barcodes [get]
 func (h *ProductHandler) ExportBarcodes(c fiber.Ctx) error {
 	var req requestdto.ExportBarcodes
 	if err := bindQuery(c, &req); err != nil {
@@ -206,7 +206,7 @@ func (h *ProductHandler) ExportBarcodes(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/products/{id} [patch]
+//	@Router			/api/v1/catalog/products/{id} [patch]
 func (h *ProductHandler) Update(c fiber.Ctx) error {
 	var req requestdto.UpdateProduct
 	if err := bindBody(c, &req); err != nil {
@@ -239,7 +239,7 @@ func (h *ProductHandler) Update(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/products/stock [patch]
+//	@Router			/api/v1/catalog/products/stock [patch]
 func (h *ProductHandler) UpdateStock(c fiber.Ctx) error {
 	var req requestdto.UpdateStock
 	if err := bindBody(c, &req); err != nil {
@@ -271,7 +271,7 @@ func (h *ProductHandler) UpdateStock(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/products/{id} [delete]
+//	@Router			/api/v1/catalog/products/{id} [delete]
 func (h *ProductHandler) Delete(c fiber.Ctx) error {
 	req := requestdto.DeleteProduct{ID: c.Params("id")}
 	if err := validate.Struct(&req); err != nil {
@@ -292,7 +292,7 @@ func (h *ProductHandler) Delete(c fiber.Ctx) error {
 //	@Security		BearerAuth
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		500	{object}	response.APIResponse
-//	@Router			/api/categories [get]
+//	@Router			/api/v1/catalog/categories [get]
 func (h *ProductHandler) ListCategories(c fiber.Ctx) error {
 	categories, err := h.usecase.ListCategories(c.Context())
 	if err != nil {
@@ -312,7 +312,7 @@ func (h *ProductHandler) ListCategories(c fiber.Ctx) error {
 //	@Param			request	body		requestdto.CategoryRequest	true	"Category name"
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		409		{object}	response.APIResponse
-//	@Router			/api/categories [post]
+//	@Router			/api/v1/catalog/categories [post]
 func (h *ProductHandler) AddCategory(c fiber.Ctx) error {
 	var req requestdto.CategoryRequest
 	if err := bindBody(c, &req); err != nil {
@@ -340,7 +340,7 @@ func (h *ProductHandler) AddCategory(c fiber.Ctx) error {
 //	@Param			request	body		requestdto.CategoryRequest	true	"New name"
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		409		{object}	response.APIResponse
-//	@Router			/api/categories/{id} [patch]
+//	@Router			/api/v1/catalog/categories/{id} [patch]
 func (h *ProductHandler) RenameCategory(c fiber.Ctx) error {
 	var req requestdto.CategoryRequest
 	if err := bindBody(c, &req); err != nil {
@@ -365,7 +365,7 @@ func (h *ProductHandler) RenameCategory(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"Category ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		409	{object}	response.APIResponse
-//	@Router			/api/categories/{id} [delete]
+//	@Router			/api/v1/catalog/categories/{id} [delete]
 func (h *ProductHandler) DeleteCategory(c fiber.Ctx) error {
 	if err := h.usecase.DeleteCategory(c.Context(), c.Params("id")); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)

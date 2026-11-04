@@ -53,13 +53,21 @@ func AutoBarcode(sku string, id uuid.UUID) string {
 	return safe + "-" + id.String()[:8]
 }
 
-// CheckQty memvalidasi qty jual maupun stok: maksimal 3 desimal (numeric(12,3))
-// dan bulat untuk pcs.
+// maxQty: batas numeric(12,3). NaN dan Inf lolos semua pembanding di bawah, jadi
+// ditolak lebih dulu.
+const maxQty = 999_999_999.999
+
+// CheckQty memvalidasi qty jual maupun stok: dalam rentang numeric(12,3), maksimal
+// 3 desimal, dan bulat untuk pcs.
 func CheckQty(unit enum.ProductUnit, qty float64) error {
+	if math.IsNaN(qty) || math.Abs(qty) > maxQty {
+		return Validation("quantity is out of range")
+	}
 	if unit.IsWhole() && qty != math.Trunc(qty) {
 		return Validation("quantity of a pcs product must be a whole number")
 	}
-	if scaled := qty * 1000; math.Abs(scaled-math.Round(scaled)) > 1e-6 {
+	// Toleransi mengikuti besar angka: float64 di sekitar 1e12 hanya teliti ±1e-4.
+	if scaled := qty * 1000; math.Abs(scaled-math.Round(scaled)) > max(1e-6, math.Abs(scaled)*1e-15) {
 		return Validation("quantity supports at most 3 decimal places")
 	}
 	return nil

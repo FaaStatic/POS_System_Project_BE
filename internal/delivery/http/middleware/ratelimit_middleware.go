@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"shop_project_be/internal/constant/apipath"
 	"shop_project_be/pkg/response"
 
 	"github.com/gofiber/fiber/v3"
@@ -31,12 +32,14 @@ func GetRefreshLimiter(store fiber.Storage) limiter.Config {
 		"too many token refreshes, please retry in 2 minutes")
 }
 
-func GetGlobalLimiter(store fiber.Storage) limiter.Config {
+// GetGlobalLimiter membatasi path di luar API (API punya limiter sendiri: per user,
+// login, refresh, webhook). Swagger UI ada di "/" dan "/{version}".
+func GetGlobalLimiter(store fiber.Storage, version string) limiter.Config {
 	cfg := slidingLimit(store, 50, time.Minute, func(c fiber.Ctx) string { return "global:" + c.IP() },
 		"too many requests, please retry in a minute")
 	cfg.Next = func(c fiber.Ctx) bool {
 		p := c.Path()
-		return p == "/" || strings.HasPrefix(p, "/api/") || p == "/payments/notification"
+		return p == "/" || p == "/"+version || strings.HasPrefix(p, apipath.Root+"/")
 	}
 	return cfg
 }

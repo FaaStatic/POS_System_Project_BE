@@ -30,7 +30,7 @@ func TestRequireFeature_GatesRoutesWhenUnconfigured(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			for _, path := range []string{"/api/payments/qris", "/api/payments/va", "/payments/notification"} {
+			for _, path := range []string{"/api/v1/sales/payments/qris", "/api/v1/sales/payments/va", "/api/v1/sales/payments/notification"} {
 				handlerRan := false
 				app := fiber.New()
 				gate := RequireFeature(tt.configured, "online payment")

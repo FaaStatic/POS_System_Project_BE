@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 
@@ -286,6 +287,9 @@ func parseNonNegativeFloat(s string) (float64, error) {
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0, err
+	}
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0, fmt.Errorf("value must be a finite number")
 	}
 	if v < 0 {
 		return 0, fmt.Errorf("value must not be negative")

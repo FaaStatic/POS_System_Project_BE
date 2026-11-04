@@ -5,11 +5,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"shop_project_be/internal/constant/apipath"
 )
 
 var reportDir = "storage/reports"
 
-const urlPrefix = "/api/reports"
+var urlPrefix = apipath.ReportsPrefix(apipath.DefaultVersion)
+
+// SetURLPrefix mengganti awalan URL unduhan sesuai versi API aktif. Dipanggil sekali
+// saat startup, sebelum server menerima request.
+func SetURLPrefix(prefix string) {
+	urlPrefix = prefix
+}
 
 type MonthReportData struct {
 	StoreName     string

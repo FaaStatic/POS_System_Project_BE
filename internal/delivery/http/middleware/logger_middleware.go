@@ -22,7 +22,7 @@ func LoggerMiddleware(log *zap.Logger) fiber.Handler {
 				_ = c.SendStatus(fiber.StatusInternalServerError)
 			}
 		}
-		// Path tanpa query string (bisa memuat token). route = pola ("/api/x/:id")
+		// Path tanpa query string (bisa memuat token). route = pola ("/api/v1/x/:id")
 		// untuk mengelompokkan per endpoint tanpa meledakkan jumlah nilai unik.
 		log.Info("HTTP Request",
 			zap.String("request_id", requestid.FromContext(c)),

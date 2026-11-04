@@ -70,7 +70,7 @@ func (h *FcmHandler) Logout(c fiber.Ctx) error {
 //	@Security		BearerAuth
 //	@Param			platform	query		string	false	"android or ios"
 //	@Success		200			{object}	response.APIResponse
-//	@Router			/api/fcm/devices [get]
+//	@Router			/api/v1/account/fcm/devices [get]
 func (h *FcmHandler) ListDevices(c fiber.Ctx) error {
 	platform := c.Query("platform")
 	if platform != "" && platform != "android" && platform != "ios" {
@@ -93,7 +93,7 @@ func (h *FcmHandler) ListDevices(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"Device row ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/fcm/devices/{id} [delete]
+//	@Router			/api/v1/account/fcm/devices/{id} [delete]
 func (h *FcmHandler) RevokeDevice(c fiber.Ctx) error {
 	if err := h.fcmUsecase.RevokeDevice(c.Context(), c.Params("id")); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)

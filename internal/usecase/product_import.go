@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -81,35 +82,59 @@ func (p *productUsecase) assignAutoSKUs(ctx context.Context, rows []sheet.Produc
 	return nil
 }
 
-// rowImage mengubah gambar satu baris menjadi base64 WebP 1:1 di bawah 500 KB.
-// Gambar yang ditempel di Excel didahulukan dari teks di sel image.
-func rowImage(row sheet.ProductRow) (string, error) {
-	if len(row.ImageFile) > 0 {
-		return productimg.FromBytes(row.ImageFile)
-	}
-	return productimg.FromText(row.Image)
-}
-
-// imageWorkers membatasi konversi paralel: satu konversi memakai ±0,1 detik CPU dan
-// puluhan MB memori untuk foto besar, jadi tanpa batas 500 foto bisa menghabiskan RAM.
-const imageWorkers = 4
+const (
+	// imageWorkers membatasi konversi paralel: satu konversi memakai ±0,1 detik CPU
+	// dan puluhan MB memori untuk foto besar.
+	imageWorkers = 4
+	// maxImportImages membatasi gambar unik per import; berurutan, 500 foto sudah
+	// butuh sekitar satu menit, terlalu lama untuk satu request.
+	maxImportImages = 500
+)
 
 type rowImageResult struct {
 	value string
 	err   error
 }
 
+// imageKey: hash sumber gambar satu baris (gambar tertanam atau teks sel), supaya
+// gambar yang sama di banyak baris cukup dikonversi sekali. Baris tanpa gambar ok=false.
+func imageKey(row sheet.ProductRow) (key [sha256.Size]byte, ok bool) {
+	switch {
+	case len(row.ImageFile) > 0:
+		return sha256.Sum256(append([]byte{'f'}, row.ImageFile...)), true
+	case row.Image != "":
+		return sha256.Sum256([]byte("t" + row.Image)), true
+	}
+	return key, false
+}
+
 // convertRowImages mengonversi gambar semua baris secara paralel terbatas; hasilnya
-// sejajar dengan rows. Berurutan, 500 foto butuh sekitar satu menit lebih, terlalu
-// lama untuk satu request.
-func convertRowImages(rows []sheet.ProductRow) []rowImageResult {
+// sejajar dengan rows. Gambar yang ditempel di Excel didahulukan dari teks di sel
+// image. Gagal bila gambar unik lebih dari maxImportImages.
+func convertRowImages(rows []sheet.ProductRow) ([]rowImageResult, error) {
 	results := make([]rowImageResult, len(rows))
-	sem := make(chan struct{}, imageWorkers)
-	var wg sync.WaitGroup
-	for i := range rows {
-		if len(rows[i].ImageFile) == 0 && rows[i].Image == "" {
+	firstByKey := make(map[[sha256.Size]byte]int)
+	duplicateOf := make(map[int]int)
+	var jobs []int
+	for i, row := range rows {
+		key, ok := imageKey(row)
+		if !ok {
 			continue
 		}
+		if first, seen := firstByKey[key]; seen {
+			duplicateOf[i] = first
+			continue
+		}
+		firstByKey[key] = i
+		jobs = append(jobs, i)
+	}
+	if len(jobs) > maxImportImages {
+		return nil, domain.Validation(fmt.Sprintf("too many images: %d distinct images in one import, the limit is %d", len(jobs), maxImportImages))
+	}
+
+	sem := make(chan struct{}, imageWorkers)
+	var wg sync.WaitGroup
+	for _, i := range jobs {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func() {
@@ -122,10 +147,19 @@ func convertRowImages(rows []sheet.ProductRow) []rowImageResult {
 					results[i].err = errors.New("image could not be processed")
 				}
 			}()
-			value, err := rowImage(rows[i])
+			var value string
+			var err error
+			if len(rows[i].ImageFile) > 0 {
+				value, err = productimg.FromBytes(rows[i].ImageFile)
+			} else {
+				value, err = productimg.FromText(rows[i].Image)
+			}
 			results[i] = rowImageResult{value: value, err: err}
 		}()
 	}
 	wg.Wait()
-	return results
+	for i, first := range duplicateOf {
+		results[i] = results[first]
+	}
+	return results, nil
 }

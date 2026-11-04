@@ -26,7 +26,7 @@ func (t *transactionUsecase) buildChange(ctx context.Context, dto *requestdto.Ad
 		}
 		return 0, nil, nil
 	}
-	if paymentType.String() != "tunai" {
+	if paymentType != enum.Tunai {
 		return 0, nil, domain.Validation("amount_paid and change only apply to tunai payments")
 	}
 	due := *dto.AmountPaid - total

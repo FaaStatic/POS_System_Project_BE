@@ -2,8 +2,11 @@ package envconfig
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
+
+	"shop_project_be/internal/constant/apipath"
 
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
@@ -31,6 +34,12 @@ type AppConfig struct {
 	Prefork        bool
 	// CMSOrigins: origin CMS web yang boleh memanggil API dengan cookie refresh.
 	CMSOrigins []string
+	// APIVersion: versi di URL, /api/{APIVersion}/... (mis. v1). Diganti dari CI/CD
+	// lewat SERVER_API_VERSION; FE harus dibangun ulang dengan versi yang sama.
+	APIVersion string
+	// PublicURL: alamat publik API yang terlihat Midtrans, dipakai membentuk URL
+	// webhook per charge. Wajib bila Midtrans aktif.
+	PublicURL string
 }
 
 type DBConfig struct {
@@ -90,6 +99,7 @@ func InitEnvConfig(log *zap.Logger) (*Config, error) {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 	viper.SetDefault("server.prefork", true)
+	viper.SetDefault("server.api_version", apipath.DefaultVersion)
 
 	if err := viper.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
@@ -107,6 +117,8 @@ func InitEnvConfig(log *zap.Logger) (*Config, error) {
 			TrustedProxies: viper.GetStringSlice("server.trusted_proxies"),
 			Prefork:        viper.GetBool("server.prefork"),
 			CMSOrigins:     viper.GetStringSlice("server.cms_origins"),
+			APIVersion:     viper.GetString("server.api_version"),
+			PublicURL:      strings.TrimRight(viper.GetString("server.public_url"), "/"),
 		},
 		DB: DBConfig{
 			Host:                   viper.GetString("database.host"),
@@ -204,6 +216,33 @@ func (c *Config) validate() error {
 	}
 	if c.JWT.RefreshTokenTTL <= 0 {
 		return fmt.Errorf("config error [jwt.refresh_token_ttl]: must be greater than 0")
+	}
+	if err := apipath.ValidateVersion(c.App.APIVersion); err != nil {
+		return fmt.Errorf("config error [server.api_version]: %w", err)
+	}
+	if c.Midtrans.Configured() {
+		if err := c.validatePublicURL(); err != nil {
+			return fmt.Errorf("config error [server.public_url]: %w", err)
+		}
+	}
+	return nil
+}
+
+// validatePublicURL: Midtrans mengirim webhook ke alamat ini, jadi harus absolut
+// dan, di production, https.
+func (c *Config) validatePublicURL() error {
+	if c.App.PublicURL == "" {
+		return fmt.Errorf("required when midtrans is configured")
+	}
+	u, err := url.Parse(c.App.PublicURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("must be an absolute URL like https://api.example.com, got %q", c.App.PublicURL)
+	}
+	switch {
+	case u.Scheme == "https":
+	case u.Scheme == "http" && c.App.Env != "production":
+	default:
+		return fmt.Errorf("must use https in production, got %q", c.App.PublicURL)
 	}
 	return nil
 }

@@ -199,7 +199,10 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 	products := make([]*domain.Products, 0, len(unique))
 	categories := make([]string, 0, len(unique))
 	// Konversi gambar berjalan paralel dan hasilnya sejajar dengan unique.
-	images := convertRowImages(unique)
+	images, err := convertRowImages(unique)
+	if err != nil {
+		return nil, err
+	}
 	for i, row := range unique {
 		current := existing[row.SKU]
 
@@ -483,21 +486,6 @@ func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request 
 		return domain.InvalidID("invalid product id format")
 	}
 
-	// Dibaca di luar lock repo dan paling banyak sekali per request; race dua PATCH
-	// bersamaan ditahan oleh chk_products_price_rules (migrasi 00004).
-	var current *domain.Products
-	loadCurrent := func() (*domain.Products, error) {
-		if current != nil {
-			return current, nil
-		}
-		product, err := p.productRepo.GetProduct(ctx, id)
-		if err != nil {
-			return nil, passOrInternal(p.log, err, "failed to update product", domain.ErrNotFound)
-		}
-		current = product
-		return current, nil
-	}
-
 	fields := make(map[string]interface{})
 	if request.SKU != nil {
 		fields["sku"] = *request.SKU
@@ -515,11 +503,20 @@ func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request 
 	}
 	// Barcode tidak pernah dikosongkan: kosong atau SKU berubah memicu barcode
 	// otomatis. Barcode manual/pabrik hanya diganti bila diminta eksplisit.
-	if request.Barcode != nil && manualBarcode == nil || request.SKU != nil && request.Barcode == nil {
-		existing, err := loadCurrent()
+	barcodeCleared := request.Barcode != nil && manualBarcode == nil
+	skuChanged := request.SKU != nil && request.Barcode == nil
+	pricesChanged := request.PurchasePrice != nil || request.SellingPrice != nil || request.SellingPriceDebt != nil
+
+	// Dibaca di luar lock repo, sekali per request; race dua PATCH bersamaan
+	// ditahan oleh chk_products_price_rules (migrasi 00004).
+	var existing *domain.Products
+	if barcodeCleared || skuChanged || pricesChanged {
+		existing, err = p.productRepo.GetProduct(ctx, id)
 		if err != nil {
-			return err
+			return passOrInternal(p.log, err, "failed to update product", domain.ErrNotFound)
 		}
+	}
+	if barcodeCleared || skuChanged {
 		sku := existing.SKU
 		if request.SKU != nil {
 			sku = *request.SKU
@@ -566,11 +563,7 @@ func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request 
 		return domain.Validation("no fields to update")
 	}
 
-	if request.PurchasePrice != nil || request.SellingPrice != nil || request.SellingPriceDebt != nil {
-		existing, err := loadCurrent()
-		if err != nil {
-			return err
-		}
+	if pricesChanged {
 		purchase, selling, sellingDebt := existing.PurchasePrice, existing.SellingPrice, existing.SellingPriceDebt
 		if request.PurchasePrice != nil {
 			purchase = *request.PurchasePrice

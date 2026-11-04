@@ -34,7 +34,7 @@ func NewTransactionHandler(trxUsecase domain.TransactionUsecase, log *zap.Logger
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/transactions [post]
+//	@Router			/api/v1/sales/transactions [post]
 func (h *TransactionHandler) Add(c fiber.Ctx) error {
 	var req requestdto.AddTransactionRequest
 	if err := bindBody(c, &req); err != nil {
@@ -67,7 +67,7 @@ func (h *TransactionHandler) Add(c fiber.Ctx) error {
 //	@Success		200				{object}	response.APIResponse
 //	@Failure		400				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/api/transactions [get]
+//	@Router			/api/v1/sales/transactions [get]
 func (h *TransactionHandler) List(c fiber.Ctx) error {
 	return h.listTransactions(c, "")
 }
@@ -87,7 +87,7 @@ func (h *TransactionHandler) List(c fiber.Ctx) error {
 //	@Success		200				{object}	response.APIResponse
 //	@Failure		400				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/api/customers/{id}/transactions [get]
+//	@Router			/api/v1/sales/customers/{id}/transactions [get]
 func (h *TransactionHandler) ListByCustomer(c fiber.Ctx) error {
 	return h.listTransactions(c, c.Params("id"))
 }
@@ -120,7 +120,7 @@ func (h *TransactionHandler) listTransactions(c fiber.Ctx, customerID string) er
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/transactions/{id} [get]
+//	@Router			/api/v1/sales/transactions/{id} [get]
 func (h *TransactionHandler) Get(c fiber.Ctx) error {
 	req := requestdto.GetTransactionRequest{ID: c.Params("id")}
 	if err := validate.Struct(&req); err != nil {
@@ -146,7 +146,7 @@ func (h *TransactionHandler) Get(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/transactions/{id} [delete]
+//	@Router			/api/v1/sales/transactions/{id} [delete]
 func (h *TransactionHandler) Delete(c fiber.Ctx) error {
 	var req requestdto.DeleteTransactionRequest
 	if err := bindBody(c, &req); err != nil {
@@ -175,7 +175,7 @@ func (h *TransactionHandler) Delete(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/transactions/report/month [get]
+//	@Router			/api/v1/sales/transactions/report/month [get]
 func (h *TransactionHandler) ReportMonth(c fiber.Ctx) error {
 	var req requestdto.PrintReportMonthRequest
 	if err := bindQuery(c, &req); err != nil {
@@ -204,7 +204,7 @@ func (h *TransactionHandler) ReportMonth(c fiber.Ctx) error {
 //	@Success		200				{object}	response.APIResponse
 //	@Failure		400				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/api/transactions/report/transaction [get]
+//	@Router			/api/v1/sales/transactions/report/transaction [get]
 func (h *TransactionHandler) ReportTransaction(c fiber.Ctx) error {
 	var req requestdto.PrintReportTransactionRequest
 	if err := bindQuery(c, &req); err != nil {
@@ -231,7 +231,7 @@ func (h *TransactionHandler) ReportTransaction(c fiber.Ctx) error {
 //	@Param			request	body		requestdto.SyncTransactionsRequest	true	"Offline queue"
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
-//	@Router			/api/transactions/sync [post]
+//	@Router			/api/v1/sales/transactions/sync [post]
 func (h *TransactionHandler) Sync(c fiber.Ctx) error {
 	var req requestdto.SyncTransactionsRequest
 	if err := bindBody(c, &req); err != nil {
@@ -258,7 +258,7 @@ func (h *TransactionHandler) Sync(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"Transaction ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/transactions/{id}/conflict-review [patch]
+//	@Router			/api/v1/sales/transactions/{id}/conflict-review [patch]
 func (h *TransactionHandler) ReviewConflict(c fiber.Ctx) error {
 	if err := h.trxUsecase.ReviewConflict(c.Context(), c.Params("id")); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)

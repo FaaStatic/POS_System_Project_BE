@@ -30,7 +30,7 @@ func NewCustomerHandler(usecase domain.CustomerUsecase, log *zap.Logger) *Custom
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/customers [post]
+//	@Router			/api/v1/sales/customers [post]
 func (h *CustomerHandler) Add(c fiber.Ctx) error {
 	var req requestdto.AddCustomer
 	if err := bindBody(c, &req); err != nil {
@@ -58,7 +58,7 @@ func (h *CustomerHandler) Add(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/customers/{id} [put]
+//	@Router			/api/v1/sales/customers/{id} [put]
 func (h *CustomerHandler) Update(c fiber.Ctx) error {
 	var req requestdto.UpdateCustomer
 	if err := bindBody(c, &req); err != nil {
@@ -86,7 +86,7 @@ func (h *CustomerHandler) Update(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/customers/{id} [delete]
+//	@Router			/api/v1/sales/customers/{id} [delete]
 func (h *CustomerHandler) Delete(c fiber.Ctx) error {
 	req := requestdto.DeleteCustomer{CustomerId: c.Params("id")}
 	if err := validate.Struct(&req); err != nil {
@@ -109,7 +109,7 @@ func (h *CustomerHandler) Delete(c fiber.Ctx) error {
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/customers/{id} [get]
+//	@Router			/api/v1/sales/customers/{id} [get]
 func (h *CustomerHandler) Get(c fiber.Ctx) error {
 	req := requestdto.GetCustomer{CustomerId: c.Params("id"), IncludeInactive: isSuperadmin(c)}
 	if err := validate.Struct(&req); err != nil {
@@ -137,7 +137,7 @@ func (h *CustomerHandler) Get(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/customers [get]
+//	@Router			/api/v1/sales/customers [get]
 func (h *CustomerHandler) List(c fiber.Ctx) error {
 	var req requestdto.GetAllCustomer
 	if err := bindQuery(c, &req); err != nil {
@@ -166,7 +166,7 @@ func (h *CustomerHandler) List(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"Customer ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/customers/{id}/restore [post]
+//	@Router			/api/v1/sales/customers/{id}/restore [post]
 func (h *CustomerHandler) Restore(c fiber.Ctx) error {
 	if err := h.usecase.RestoreCustomerShop(c.Context(), c.Params("id")); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
@@ -184,7 +184,7 @@ func (h *CustomerHandler) Restore(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"Customer ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		409	{object}	response.APIResponse
-//	@Router			/api/customers/{id}/permanent [delete]
+//	@Router			/api/v1/sales/customers/{id}/permanent [delete]
 func (h *CustomerHandler) Purge(c fiber.Ctx) error {
 	result, err := h.usecase.PurgeCustomerShop(c.Context(), c.Params("id"))
 	if err != nil {

@@ -76,7 +76,7 @@ func (h *UserHandler) moveRefreshToCookie(c fiber.Ctx, result *responsedto.UserL
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		409		{object}	response.APIResponse
-//	@Router			/api/auth/register [post]
+//	@Router			/api/v1/account/auth/register [post]
 func (h *UserHandler) Register(c fiber.Ctx) error {
 	var req requestdto.UserRegisterRequest
 	if err := bindBody(c, &req); err != nil {
@@ -104,7 +104,7 @@ func (h *UserHandler) Register(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		401		{object}	response.APIResponse
-//	@Router			/auth/login [post]
+//	@Router			/api/v1/account/auth/login [post]
 func (h *UserHandler) Login(c fiber.Ctx) error {
 	var req requestdto.UserLoginRequest
 	if err := bindBody(c, &req); err != nil {
@@ -136,7 +136,7 @@ func (h *UserHandler) Login(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		401		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/auth/logout [post]
+//	@Router			/api/v1/account/auth/logout [post]
 func (h *UserHandler) Logout(c fiber.Ctx) error {
 	var req requestdto.UserLogoutRequest
 	if err := bindBody(c, &req); err != nil {
@@ -177,7 +177,7 @@ func (h *UserHandler) Logout(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		401		{object}	response.APIResponse
-//	@Router			/auth/refresh [post]
+//	@Router			/api/v1/account/auth/refresh [post]
 func (h *UserHandler) Refresh(c fiber.Ctx) error {
 	var req requestdto.UserRefreshTokenRequest
 	web := isWebClient(c)
@@ -216,7 +216,7 @@ func (h *UserHandler) Refresh(c fiber.Ctx) error {
 //	@Param			after_id	query		string	false	"Cursor id"
 //	@Param			after_time	query		string	false	"Cursor time"
 //	@Success		200			{object}	response.APIResponse
-//	@Router			/api/users [get]
+//	@Router			/api/v1/account/users [get]
 func (h *UserHandler) ListStaff(c fiber.Ctx) error {
 	var req requestdto.ListStaffRequest
 	if err := bindQuery(c, &req); err != nil {
@@ -245,7 +245,7 @@ func (h *UserHandler) ListStaff(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		403		{object}	response.APIResponse
 //	@Failure		409		{object}	response.APIResponse
-//	@Router			/api/users/{id} [patch]
+//	@Router			/api/v1/account/users/{id} [patch]
 func (h *UserHandler) UpdateStaff(c fiber.Ctx) error {
 	var req requestdto.UpdateStaffRequest
 	if err := bindBody(c, &req); err != nil {
@@ -271,7 +271,7 @@ func (h *UserHandler) UpdateStaff(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"User ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/users/{id} [delete]
+//	@Router			/api/v1/account/users/{id} [delete]
 func (h *UserHandler) DeactivateStaff(c fiber.Ctx) error {
 	if err := h.usecase.DeactivateStaff(c.Context(), c.Params("id")); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
@@ -289,7 +289,7 @@ func (h *UserHandler) DeactivateStaff(c fiber.Ctx) error {
 //	@Param			id	path		string	true	"User ID"
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/users/{id}/restore [post]
+//	@Router			/api/v1/account/users/{id}/restore [post]
 func (h *UserHandler) RestoreStaff(c fiber.Ctx) error {
 	if err := h.usecase.RestoreStaff(c.Context(), c.Params("id")); err != nil {
 		return writeError(c, fiber.StatusInternalServerError, err)
@@ -309,7 +309,7 @@ func (h *UserHandler) RestoreStaff(c fiber.Ctx) error {
 //	@Param			request	body		requestdto.PurgeStaffRequest	true	"Username confirmation"
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		409		{object}	response.APIResponse
-//	@Router			/api/users/{id}/permanent [delete]
+//	@Router			/api/v1/account/users/{id}/permanent [delete]
 func (h *UserHandler) PurgeStaff(c fiber.Ctx) error {
 	var req requestdto.PurgeStaffRequest
 	if err := bindBody(c, &req); err != nil {

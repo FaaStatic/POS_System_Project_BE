@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"image/color"
 	"image/png"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,6 +24,24 @@ func TestPNGDecodesWithQuietZone(t *testing.T) {
 	// Piksel paling kiri ada di quiet zone, jadi harus putih.
 	if r, g, b, _ := img.At(0, img.Bounds().Dy()/2).RGBA(); r != 0xffff || g != 0xffff || b != 0xffff {
 		t.Fatal("quiet zone must be white")
+	}
+}
+
+func TestWebPCacheIsBounded(t *testing.T) {
+	webpMu.Lock()
+	clear(webpCache)
+	for i := 0; i < webpCacheMax; i++ {
+		webpCache["stale-"+strconv.Itoa(i)] = "x"
+	}
+	webpMu.Unlock()
+
+	if _, err := WebPBase64("FRESH-1"); err != nil {
+		t.Fatal(err)
+	}
+	webpMu.RLock()
+	defer webpMu.RUnlock()
+	if _, ok := webpCache["FRESH-1"]; !ok || len(webpCache) != 1 {
+		t.Fatalf("a full cache must be emptied and keep only the new entry, got %d entries", len(webpCache))
 	}
 }
 

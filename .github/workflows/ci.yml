@@ -1,0 +1,78 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [master, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shop_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    # Integration tests skip unless these are set; with them the whole suite runs.
+    env:
+      TEST_DATABASE_DSN: postgres://postgres:postgres@localhost:5432/shop_test?sslmode=disable
+      TEST_MIGRATION_DSN: postgres://postgres:postgres@localhost:5432/shop_migration?sslmode=disable
+      TEST_REDIS_ADDR: localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go mod verify
+      - run: go vet ./...
+      - name: Migrate the test database
+        run: |
+          # The migration test needs an empty database of its own (goose up, down to 0, up).
+          psql "postgres://postgres:postgres@localhost:5432/postgres" -c "CREATE DATABASE shop_migration"
+          for f in infrastructure/database/migrations/*.sql; do
+            awk '/^-- \+goose Up/{u=1;next} /^-- \+goose Down/{u=0} u' "$f" \
+              | psql "$TEST_DATABASE_DSN" -v ON_ERROR_STOP=1 -q
+          done
+      - run: go test -race -count=1 ./...
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the server binary
+        run: CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/server .
+      - name: Generate Swagger and check the URL format
+        run: |
+          go install github.com/swaggo/swag/cmd/swag@v1.16.4
+          make swagger
+          python3 -c "import json; bad=[p for p in json.load(open('swagger.json'))['paths'] if not p.startswith('/api/v1/')]; assert not bad, bad"

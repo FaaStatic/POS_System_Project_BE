@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -37,6 +38,13 @@ func TestCheckQty(t *testing.T) {
 		{"kg four decimals", "kg", 0.1234, true},
 		{"kardus quarter", "kardus", 0.25, false},
 		{"gram fractional", "gram", 12.5, false},
+		{"kg NaN", "kg", math.NaN(), true},
+		{"pcs NaN", "pcs", math.NaN(), true},
+		{"pcs Inf", "pcs", math.Inf(1), true},
+		{"kg -Inf", "kg", math.Inf(-1), true},
+		{"over numeric(12,3)", "kg", 1e10, true},
+		{"negative delta in range", "kg", -2.5, false},
+		{"upper bound", "kg", maxQty, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

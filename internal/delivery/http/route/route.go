@@ -1,6 +1,7 @@
 package route
 
 import (
+	"shop_project_be/internal/constant/apipath"
 	"shop_project_be/internal/constant/enum"
 	"shop_project_be/internal/delivery/http/handler"
 	"shop_project_be/internal/delivery/http/middleware"
@@ -21,42 +22,48 @@ type Handlers struct {
 	Dashboard   *handler.DashboardHandler
 }
 
-func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log *zap.Logger, midtransConfigured bool) func(router fiber.Router) {
+// New memasang semua rute di /api/{version}/{group}/{service}. Rute tanpa JWT hanya
+// login, refresh, dan webhook Midtrans; group account dan sales memuat keduanya,
+// jadi JWT dipasang per rute atau per service, bukan per group.
+func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log *zap.Logger, midtransConfigured bool, version string) func(router fiber.Router) {
 	return func(router fiber.Router) {
-		auth := router.Group("/auth")
+		jwt := jwtMw.Auth(log)
+		userLimit := limiter.New(middleware.GetUserLimiter(storage))
+		onlySuper := jwtMw.RequireRole(enum.Superadmin.String())
+		requireMidtrans := middleware.RequireFeature(midtransConfigured, "online payment")
+		// secure: JWT dan limiter per user, lalu middleware tambahan service itu.
+		secure := func(extra ...any) []any {
+			return append([]any{jwt, userLimit}, extra...)
+		}
+
+		account := router.Group(apipath.Group(version, apipath.GroupAccount))
+		auth := account.Group("/auth")
 		auth.Post("/login", limiter.New(middleware.GetLoginLimiter(storage)), h.User.Login)
 		auth.Post("/refresh", limiter.New(middleware.GetRefreshLimiter(storage)), h.User.Refresh)
+		auth.Post("/logout", jwt, userLimit, h.User.Logout)
+		auth.Post("/register", jwt, userLimit, onlySuper, h.User.Register)
 
-		requireMidtrans := middleware.RequireFeature(midtransConfigured, "online payment")
-
-		router.Post("/payments/notification", requireMidtrans, limiter.New(middleware.GetWebhookLimiter(storage)), h.Payment.Notification)
-
-		api := router.Group("/api", jwtMw.Auth(log), limiter.New(middleware.GetUserLimiter(storage)))
-
-		api.Post("/auth/logout", h.User.Logout)
-
-		onlySuper := jwtMw.RequireRole(enum.Superadmin.String())
-
-		api.Post("/auth/register", onlySuper, h.User.Register)
-
-		users := api.Group("/users", onlySuper)
+		users := account.Group("/users", secure(onlySuper)...)
 		users.Get("", h.User.ListStaff)
 		users.Patch("/:id", h.User.UpdateStaff)
 		users.Delete("/:id", h.User.DeactivateStaff)
 		users.Post("/:id/restore", h.User.RestoreStaff)
 		users.Delete("/:id/permanent", h.User.PurgeStaff)
 
-		api.Get("/dashboard/summary", onlySuper, h.Dashboard.Summary)
+		fcm := account.Group("/fcm", secure()...)
+		fcm.Post("/register", h.Fcm.Register)
+		fcm.Post("/logout", h.Fcm.Logout)
+		fcm.Get("/devices", onlySuper, h.Fcm.ListDevices)
+		fcm.Delete("/devices/:id", onlySuper, h.Fcm.RevokeDevice)
 
-		api.Get("/reports/:file", handler.DownloadReport)
+		catalog := router.Group(apipath.Group(version, apipath.GroupCatalog), secure()...)
 
-		products := api.Group("/products")
+		products := catalog.Group("/products")
 		products.Post("", onlySuper, h.Product.Add)
 		products.Post("/bulk", onlySuper, h.Product.AddBulk)
 		// /template didaftarkan sebelum /:id supaya tidak tertangkap sebagai id.
 		products.Get("/template", onlySuper, h.Product.DownloadTemplate)
 		products.Get("", h.Product.List)
-		// /export/barcodes didaftarkan sebelum /:id supaya tidak tertangkap sebagai id.
 		products.Get("/export/barcodes", h.Product.ExportBarcodes)
 		products.Get("/:id", h.Product.Get)
 		// /stock didaftarkan sebelum /:id supaya tidak tertangkap sebagai id.
@@ -64,12 +71,18 @@ func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log
 		products.Patch("/:id", h.Product.Update)
 		products.Delete("/:id", onlySuper, h.Product.Delete)
 
-		api.Get("/categories", h.Product.ListCategories)
-		api.Post("/categories", onlySuper, h.Product.AddCategory)
-		api.Patch("/categories/:id", onlySuper, h.Product.RenameCategory)
-		api.Delete("/categories/:id", onlySuper, h.Product.DeleteCategory)
+		categories := catalog.Group("/categories")
+		categories.Get("", h.Product.ListCategories)
+		categories.Post("", onlySuper, h.Product.AddCategory)
+		categories.Patch("/:id", onlySuper, h.Product.RenameCategory)
+		categories.Delete("/:id", onlySuper, h.Product.DeleteCategory)
 
-		transactions := api.Group("/transactions")
+		sales := router.Group(apipath.Group(version, apipath.GroupSales))
+		// Webhook didaftarkan sebelum group payments ber-JWT di bawahnya; Midtrans tidak
+		// membawa token.
+		sales.Post("/payments/notification", requireMidtrans, limiter.New(middleware.GetWebhookLimiter(storage)), h.Payment.Notification)
+
+		transactions := sales.Group("/transactions", secure()...)
 		transactions.Post("", h.Transaction.Add)
 		transactions.Post("/sync", h.Transaction.Sync)
 		transactions.Get("", h.Transaction.List)
@@ -79,13 +92,13 @@ func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log
 		transactions.Delete("/:id", h.Transaction.Delete)
 		transactions.Patch("/:id/conflict-review", onlySuper, h.Transaction.ReviewConflict)
 
-		payments := api.Group("/payments", requireMidtrans)
+		payments := sales.Group("/payments", secure(requireMidtrans)...)
 		payments.Post("/qris", h.Payment.ChargeQris)
 		payments.Post("/va", h.Payment.ChargeVA)
 		payments.Get("", onlySuper, h.Payment.List)
 		payments.Get("/:order_id/status", h.Payment.Status)
 
-		customers := api.Group("/customers")
+		customers := sales.Group("/customers", secure()...)
 		customers.Post("", h.Customer.Add)
 		customers.Get("", h.Customer.List)
 		customers.Get("/:id", h.Customer.Get)
@@ -96,17 +109,15 @@ func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log
 		customers.Post("/:id/restore", onlySuper, h.Customer.Restore)
 		customers.Delete("/:id/permanent", onlySuper, h.Customer.Purge)
 
-		debts := api.Group("/debts")
+		debts := sales.Group("/debts", secure()...)
 		debts.Post("", onlySuper, h.Debt.Add)
 		debts.Post("/pay", h.Debt.Pay)
 		debts.Get("", h.Debt.List)
 		debts.Get("/report", onlySuper, h.Debt.Report)
 		debts.Get("/:id", h.Debt.Get)
 
-		fcm := api.Group("/fcm")
-		fcm.Post("/register", h.Fcm.Register)
-		fcm.Post("/logout", h.Fcm.Logout)
-		fcm.Get("/devices", onlySuper, h.Fcm.ListDevices)
-		fcm.Delete("/devices/:id", onlySuper, h.Fcm.RevokeDevice)
+		insight := router.Group(apipath.Group(version, apipath.GroupInsight), secure()...)
+		insight.Get("/dashboard/summary", onlySuper, h.Dashboard.Summary)
+		insight.Get("/reports/:file", handler.DownloadReport)
 	}
 }

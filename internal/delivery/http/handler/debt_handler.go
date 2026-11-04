@@ -31,7 +31,7 @@ func NewDebtHandler(usecase domain.DebtUseCase, log *zap.Logger) *DebtHandler {
 //	@Success		201		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/debts [post]
+//	@Router			/api/v1/sales/debts [post]
 func (h *DebtHandler) Add(c fiber.Ctx) error {
 	var req requestdto.AddDebtRequest
 	if err := bindBody(c, &req); err != nil {
@@ -66,7 +66,7 @@ func (h *DebtHandler) Add(c fiber.Ctx) error {
 //	@Success		200			{object}	response.APIResponse
 //	@Failure		400			{object}	response.APIResponse
 //	@Failure		500			{object}	response.APIResponse
-//	@Router			/api/debts [get]
+//	@Router			/api/v1/sales/debts [get]
 func (h *DebtHandler) List(c fiber.Ctx) error {
 	var req requestdto.FilterDebtRequest
 	if err := bindQuery(c, &req); err != nil {
@@ -93,7 +93,7 @@ func (h *DebtHandler) List(c fiber.Ctx) error {
 //	@Success		200	{object}	response.APIResponse
 //	@Failure		400	{object}	response.APIResponse
 //	@Failure		404	{object}	response.APIResponse
-//	@Router			/api/debts/{id} [get]
+//	@Router			/api/v1/sales/debts/{id} [get]
 func (h *DebtHandler) Get(c fiber.Ctx) error {
 	req := requestdto.GetDebtRequest{DebtId: c.Params("id")}
 	if err := validate.Struct(&req); err != nil {
@@ -118,7 +118,7 @@ func (h *DebtHandler) Get(c fiber.Ctx) error {
 //	@Success		200		{object}	response.APIResponse
 //	@Failure		400		{object}	response.APIResponse
 //	@Failure		500		{object}	response.APIResponse
-//	@Router			/api/debts/pay [post]
+//	@Router			/api/v1/sales/debts/pay [post]
 func (h *DebtHandler) Pay(c fiber.Ctx) error {
 	var req requestdto.DebtPayment
 	if err := bindBody(c, &req); err != nil {
@@ -148,7 +148,7 @@ func (h *DebtHandler) Pay(c fiber.Ctx) error {
 //	@Param			year			query		string	false	"Tahun"
 //	@Success		200				{object}	response.APIResponse
 //	@Failure		500				{object}	response.APIResponse
-//	@Router			/api/debts/report [get]
+//	@Router			/api/v1/sales/debts/report [get]
 func (h *DebtHandler) Report(c fiber.Ctx) error {
 	var req requestdto.PrintDebtReport
 	if err := bindQuery(c, &req); err != nil {

@@ -16,7 +16,7 @@ Provide a lightweight but secure cashier API for small shops: stock tracking, at
 - **Pricing rules**: the selling price must be above the purchase price and the debt price at least 105% of the selling price; checked in the usecase and enforced by the `chk_products_price_rules` constraint. Staff may edit products, but purchase price, product type, stock, and new categories are superadmin-only
 - **Product barcode**: optional, one per product, unique among active products (letters, digits, `-._`, max 64 characters, no checksum validation because shops also use self-made barcodes). In bulk import, an empty barcode cell keeps the existing barcode, and a conflicting barcode only fails that row
 - **Categories as a table**: names are unique case-insensitively and ignoring edge whitespace (`key = lower(trim(name))`); a category still used by products cannot be deleted
-- **Offline transactions (cashier)**: `POST /api/transactions/sync` accepts up to 100 cash/debt transactions created without internet. Each item carries a `client_ref` (UUID) so a resent queue is never recorded twice, uses the price the buyer actually paid, and succeeds or fails independently (`retryable` tells the client whether to resend). If server stock is short, the transaction is still accepted, stock stops at 0, and the transaction is flagged `stock_conflict` for admin review
+- **Offline transactions (cashier)**: `POST /api/v1/sales/transactions/sync` accepts up to 100 cash/debt transactions created without internet. Each item carries a `client_ref` (UUID) so a resent queue is never recorded twice, uses the price the buyer actually paid, and succeeds or fails independently (`retryable` tells the client whether to resend). If server stock is short, the transaction is still accepted, stock stops at 0, and the transaction is flagged `stock_conflict` for admin review
 - **Transaction cancellation** requires a reason; staff may only cancel their own transactions on the same day
 - **Debts**: one open debt per customer (guarded by a partial unique index), installment payments with an `idempotency_key` so a retried request is not recorded twice, manual debts recorded in `debt_adjustments` for reports
 - **Staff and customer management**: deactivate (soft delete), restore, and permanently delete. Accounts still referenced by sales/debt history are anonymized instead of deleted, so old reports stay intact. Deactivating staff immediately revokes all their sessions and push tokens
@@ -27,13 +27,13 @@ Provide a lightweight but secure cashier API for small shops: stock tracking, at
 - **CMS web auth**: requests with the `X-Client: web` header receive the refresh token as an `HttpOnly; SameSite=Strict` cookie instead of in the body, so JavaScript cannot read it. The header also acts as a CSRF guard. Staff login from the CMS is rejected (403)
 - **Privileged accounts via CLI**: `superadmin` is created with the `create-admin` command, not a public endpoint
 - **Keyset pagination** (`after_time` + `after_id`) on all list endpoints, backed by a `(created_at, id)` index
-- **Reports**: CSV/Excel product import (max 10,000 rows, per-row results returned) and PDF for receipts, monthly reports, and debt summaries; PDFs are downloaded through `GET /api/reports/:file` (JWT required, random file name, expires after 1 hour)
-- **Built-in security**: rate limiting (Redis storage) per IP for public routes and per user for `/api/*`, with separate buckets for login, refresh, and webhook; Helmet/XSS headers, CORS (allowlist of CMS origins when `server.cms_origins` is set), trusted proxy for real client IP detection
+- **Reports**: CSV/Excel product import (max 10,000 rows, per-row results returned) and PDF for receipts, monthly reports, and debt summaries; PDFs are downloaded through `GET /api/v1/insight/reports/:file` (JWT required, random file name, expires after 1 hour)
+- **Built-in security**: rate limiting (Redis storage) per IP for public routes and per user for `/api/{version}/*`, with separate buckets for login, refresh, and webhook; Helmet/XSS headers, CORS (allowlist of CMS origins when `server.cms_origins` is set), trusted proxy for real client IP detection
 - **Versioned migrations with goose**: SQL files embedded in the binary, run through the `migrate` / `migrate-reset` commands
 - **Per-environment configuration** via Viper (`.config.<env>.yaml`), env var overrides, and secrets from files (`<KEY>_FILE`)
 - **Docker Compose** for Postgres, Redis, migrations, and the app; secrets are passed as files, not container env vars
 - **Centralized logging (Loki + Grafana)**: the app writes one JSON line per request to stdout (`request_id`, `method`, `path` without query string, `route`, `status`, `latency_ms`, `ip`); Grafana Alloy reads it from Docker and ships it to Loki, viewed through Grafana at `127.0.0.1:3000`. Postgres and Redis logs are collected too. See [Logging (Loki + Grafana)](#logging-loki--grafana)
-- **Swagger UI** at the root (`/`), generated from handler annotations
+- **Swagger UI** at `/{version}` (e.g. `/v1`, `/` redirects there), generated from handler annotations
 
 ## Architecture
 
@@ -44,7 +44,7 @@ The project uses **Clean Architecture** on top of Fiber v3. Code is split into l
 ```
                     ┌──────────────────────────────────────────────────┐
    REST/JSON        │               Fiber v3 app (:3030)               │
-  ───────────────►  │ helmet, CORS, global rate limit, Swagger UI (/)  │
+  ───────────────►  │ helmet, CORS, global rate limit, Swagger UI (/v1)│
                     └────────────────────────┬─────────────────────────┘
                                              ▼
                     ┌──────────────────────────────────────────────────┐
@@ -71,7 +71,7 @@ The project uses **Clean Architecture** on top of Fiber v3. Code is split into l
               │    18    │ │   8   │   │     API      │   │              │
               └──────────┘ └───▲───┘   └──────┬───────┘   └──────────────┘
                                │              │ webhook
-          JWT sessions + rate limit ┘         └──► POST /payments/notification
+          JWT sessions + rate limit ┘         └──► POST /api/v1/sales/payments/notification
 
         ┌──────────────────────────────────────────────────────────────────┐
         │ domain — the core, depends on none of the layers above           │
@@ -161,8 +161,8 @@ All objects are created manually in `cmd/fiber_command.go` (the `serve` command)
 
 `requestid` → `logger` → `recover`/helmet/CORS → `route` → `middleware` (rate limit, JWT + role) → `handler` (bind + DTO validation) → `usecase` → `repository` → Postgres/Redis.
 
-- Public: `/auth/login`, `/auth/refresh`, and the webhook `/payments/notification` (verified by `signature_key`, not JWT).
-- Everything else sits under the JWT-protected `/api` group; sensitive actions (staff management, categories, devices, data deletion, stock, dashboard, monthly and debt reports) are `superadmin` only.
+- Public: `/api/v1/account/auth/login`, `/api/v1/account/auth/refresh`, and the webhook `/api/v1/sales/payments/notification` (verified by `signature_key`, not JWT).
+- Every URL is `/api/{version}/{group}/{service}` with groups `account`, `catalog`, `sales`, and `insight`. The version comes from `server.api_version` (default `v1`; override with `SERVER_API_VERSION`). Requests to another version, or to old unversioned URLs, get a 404 that names the supported version. Everything else needs a JWT; sensitive actions (staff management, categories, devices, data deletion, stock, dashboard, monthly and debt reports) are `superadmin` only.
 
 ### Configuration flow
 
@@ -244,41 +244,43 @@ Notes:
 
 ## Main endpoints
 
+Every path below is shown with `v1`; the real prefix is `/api/{server.api_version}`. The frontend is built with the same version (`API_VERSION` in its `.env`), so raise both together.
+
 | Group | Endpoint | Access |
 | --- | --- | --- |
-| Auth | `POST /auth/login`, `POST /auth/refresh` (CMS: send `X-Client: web`, refresh token via cookie) | Public (rate-limited) |
-| Auth | `POST /api/auth/logout` | JWT |
-| Auth | `POST /api/auth/register` (creates staff) | superadmin |
-| Staff | `GET /api/users?status=active\|inactive`, `PATCH /api/users/:id`, `DELETE /api/users/:id` (deactivate), `POST /api/users/:id/restore`, `DELETE /api/users/:id/permanent` (body `{"confirm": "<username>"}`) | superadmin |
-| Dashboard | `GET /api/dashboard/summary?date_start=&date_end=` (defaults to today) | superadmin |
-| Reports | `GET /api/reports/:file` | JWT |
-| Payments | `POST /payments/notification` (Midtrans webhook) | Public (rate-limited, verified by `signature_key`) |
-| Payments | `POST /api/payments/qris`, `POST /api/payments/va`, `GET /api/payments/:order_id/status` | JWT (503 if Midtrans is not configured) |
-| Payments | `GET /api/payments?status=&method=&date_start=&date_end=` (monitoring) | superadmin |
-| Products | `GET /api/products` (`barcode=` for scan results, exact match), `GET /api/products/:id` | JWT |
-| Products | `PATCH /api/products/:id` (staff: no purchase price, product type, or new categories) | JWT |
-| Products | `POST /api/products`, `POST /api/products/bulk`, `PATCH /api/products/stock`, `DELETE /api/products/:id` | superadmin |
-| Categories | `GET /api/categories` (with `product_count`) | JWT |
-| Categories | `POST /api/categories`, `PATCH /api/categories/:id`, `DELETE /api/categories/:id` | superadmin |
-| Transactions | `POST /api/transactions`, `POST /api/transactions/sync`, `GET /api/transactions` (`open_conflict=true` for stock conflicts), `GET /api/transactions/:id`, `GET /api/transactions/report/transaction` | JWT |
-| Transactions | `DELETE /api/transactions/:id` (body `{"reason"}`; staff: own transactions today) | JWT |
-| Transactions | `GET /api/transactions/report/month`, `PATCH /api/transactions/:id/conflict-review` | superadmin |
-| Customers | `POST /api/customers`, `GET /api/customers`, `GET /api/customers/:id`, `GET /api/customers/:id/transactions` | JWT |
-| Customers | `GET /api/customers?status=inactive`, `PUT /api/customers/:id`, `DELETE /api/customers/:id` (deactivate), `POST /api/customers/:id/restore`, `DELETE /api/customers/:id/permanent` | superadmin |
-| Debts | `POST /api/debts/pay`, `GET /api/debts`, `GET /api/debts/:id` | JWT |
-| Debts | `POST /api/debts` (manual debt), `GET /api/debts/report` | superadmin |
-| FCM | `POST /api/fcm/register`, `POST /api/fcm/logout` | JWT |
-| FCM | `GET /api/fcm/devices`, `DELETE /api/fcm/devices/:id` | superadmin |
+| Auth | `POST /api/v1/account/auth/login`, `POST /api/v1/account/auth/refresh` (CMS: send `X-Client: web`, refresh token via cookie) | Public (rate-limited) |
+| Auth | `POST /api/v1/account/auth/logout` | JWT |
+| Auth | `POST /api/v1/account/auth/register` (creates staff) | superadmin |
+| Staff | `GET /api/v1/account/users?status=active\|inactive`, `PATCH /api/v1/account/users/:id`, `DELETE /api/v1/account/users/:id` (deactivate), `POST /api/v1/account/users/:id/restore`, `DELETE /api/v1/account/users/:id/permanent` (body `{"confirm": "<username>"}`) | superadmin |
+| Dashboard | `GET /api/v1/insight/dashboard/summary?date_start=&date_end=` (defaults to today) | superadmin |
+| Reports | `GET /api/v1/insight/reports/:file` | JWT |
+| Payments | `POST /api/v1/sales/payments/notification` (Midtrans webhook) | Public (rate-limited, verified by `signature_key`) |
+| Payments | `POST /api/v1/sales/payments/qris`, `POST /api/v1/sales/payments/va`, `GET /api/v1/sales/payments/:order_id/status` | JWT (503 if Midtrans is not configured) |
+| Payments | `GET /api/v1/sales/payments?status=&method=&date_start=&date_end=` (monitoring) | superadmin |
+| Products | `GET /api/v1/catalog/products` (`barcode=` for scan results, exact match), `GET /api/v1/catalog/products/:id` | JWT |
+| Products | `PATCH /api/v1/catalog/products/:id` (staff: no purchase price, product type, or new categories) | JWT |
+| Products | `POST /api/v1/catalog/products`, `POST /api/v1/catalog/products/bulk`, `PATCH /api/v1/catalog/products/stock`, `DELETE /api/v1/catalog/products/:id` | superadmin |
+| Categories | `GET /api/v1/catalog/categories` (with `product_count`) | JWT |
+| Categories | `POST /api/v1/catalog/categories`, `PATCH /api/v1/catalog/categories/:id`, `DELETE /api/v1/catalog/categories/:id` | superadmin |
+| Transactions | `POST /api/v1/sales/transactions`, `POST /api/v1/sales/transactions/sync`, `GET /api/v1/sales/transactions` (`open_conflict=true` for stock conflicts), `GET /api/v1/sales/transactions/:id`, `GET /api/v1/sales/transactions/report/transaction` | JWT |
+| Transactions | `DELETE /api/v1/sales/transactions/:id` (body `{"reason"}`; staff: own transactions today) | JWT |
+| Transactions | `GET /api/v1/sales/transactions/report/month`, `PATCH /api/v1/sales/transactions/:id/conflict-review` | superadmin |
+| Customers | `POST /api/v1/sales/customers`, `GET /api/v1/sales/customers`, `GET /api/v1/sales/customers/:id`, `GET /api/v1/sales/customers/:id/transactions` | JWT |
+| Customers | `GET /api/v1/sales/customers?status=inactive`, `PUT /api/v1/sales/customers/:id`, `DELETE /api/v1/sales/customers/:id` (deactivate), `POST /api/v1/sales/customers/:id/restore`, `DELETE /api/v1/sales/customers/:id/permanent` | superadmin |
+| Debts | `POST /api/v1/sales/debts/pay`, `GET /api/v1/sales/debts`, `GET /api/v1/sales/debts/:id` | JWT |
+| Debts | `POST /api/v1/sales/debts` (manual debt), `GET /api/v1/sales/debts/report` | superadmin |
+| FCM | `POST /api/v1/account/fcm/register`, `POST /api/v1/account/fcm/logout` | JWT |
+| FCM | `GET /api/v1/account/fcm/devices`, `DELETE /api/v1/account/fcm/devices/:id` | superadmin |
 
 Behavior notes:
 
-- `GET /api/debts` does not include the transaction list (`transaction_list` is always `[]`) because a single open debt can hold an unbounded number of transactions. Fetch them through `GET /api/customers/:id/transactions` using the `customer_id` from the debt response; filter with `type_payment=1` for debt transactions only. `GET /api/debts/:id` still includes its transactions.
-- `PUT /api/customers/:id` is a partial update: fields not sent are left unchanged, an empty string clears `phone_number`/`address`, the name must not be empty, and a body with no fields → 400.
+- `GET /api/v1/sales/debts` does not include the transaction list (`transaction_list` is always `[]`) because a single open debt can hold an unbounded number of transactions. Fetch them through `GET /api/v1/sales/customers/:id/transactions` using the `customer_id` from the debt response; filter with `type_payment=1` for debt transactions only. `GET /api/v1/sales/debts/:id` still includes its transactions.
+- `PUT /api/v1/sales/customers/:id` is a partial update: fields not sent are left unchanged, an empty string clears `phone_number`/`address`, the name must not be empty, and a body with no fields → 400.
 - Permanent deletion only applies to data that has already been deactivated. The response `mode` is `deleted` (row removed) or `anonymized` (row kept because history references it). A customer with an unpaid debt can be neither deactivated nor deleted.
-- `POST /api/transactions/sync`: a device clock more than 5 minutes ahead of, or more than 30 days behind, the server time is replaced by the server time. Only cash and debt can be recorded offline.
+- `POST /api/v1/sales/transactions/sync`: a device clock more than 5 minutes ahead of, or more than 30 days behind, the server time is replaced by the server time. Only cash and debt can be recorded offline.
 - "Devices online" on the dashboard is counted from push tokens still attached to a user (the device is logged in).
 
-Full documentation is available in the Swagger UI (root `/`) once the server is running.
+Full documentation is available in the Swagger UI (`/v1`, or whichever version is configured) once the server is running.
 
 ## Stack
 
@@ -302,6 +304,8 @@ server:
   host: localhost
   trusted_proxies: []      # IP/CIDR of the reverse proxy when behind nginx
   cms_origins: []          # CMS web origin, e.g. https://cms.tokoku.id; empty = CORS * without cookies
+  api_version: v1          # URL version, /api/{api_version}/...; format v1, v2; CI/CD sets SERVER_API_VERSION
+  public_url: https://api.tokoku.id  # required when Midtrans is configured; builds the per-charge webhook URL (https in production)
   prefork: true            # optional, default true; Docker forces false
 database:
   user: <user>
@@ -367,7 +371,7 @@ make serve-dev          # APP_ENV=development go run main.go serve
 make serve              # APP_ENV=production
 ```
 
-The server runs on `server.port`; Swagger UI at the root `/`.
+The server runs on `server.port`; Swagger UI at `/{version}` (default `/v1`).
 
 ### Other Makefile commands
 

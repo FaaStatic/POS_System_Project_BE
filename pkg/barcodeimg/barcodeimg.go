@@ -15,6 +15,7 @@ import (
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/code128"
 	"github.com/gen2brain/webp"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -53,26 +54,50 @@ func PNG(code string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+// webpCacheMax membatasi cache: barcode yang sudah tidak dipakai (SKU diganti,
+// produk dihapus) tidak pernah dibuang satu per satu, jadi cache dikosongkan penuh
+// saat mencapai batas. ponytail: kosongkan penuh; ganti LRU bila churn barcode tinggi.
+const webpCacheMax = 5000
+
 // webpCache menyimpan hasil per kode: gambar murni fungsi dari kodenya, dan list
-// produk memanggilnya sampai 100x per halaman. Ukurannya sebesar jumlah produk.
-var webpCache sync.Map
+// produk memanggilnya sampai 100x per halaman.
+var (
+	webpMu    sync.RWMutex
+	webpCache = make(map[string]string)
+	webpGroup singleflight.Group
+)
 
 // WebPBase64 mengembalikan base64 mentah (tanpa prefix data URI, sama seperti
 // products.image; FE yang menambahkan "data:image/webp;base64,"). Lossless supaya
-// tepi batang tidak kabur dan tetap terbaca scanner.
+// tepi batang tidak kabur dan tetap terbaca scanner. Permintaan bersamaan untuk
+// kode yang sama (cache dingin) dikodekan sekali.
 func WebPBase64(code string) (string, error) {
-	if cached, ok := webpCache.Load(code); ok {
-		return cached.(string), nil
+	webpMu.RLock()
+	cached, ok := webpCache[code]
+	webpMu.RUnlock()
+	if ok {
+		return cached, nil
 	}
-	img, err := render(code)
+	encoded, err, _ := webpGroup.Do(code, func() (any, error) {
+		img, err := render(code)
+		if err != nil {
+			return "", err
+		}
+		var buf bytes.Buffer
+		if err := webp.Encode(&buf, img, webp.Options{Lossless: true}); err != nil {
+			return "", fmt.Errorf("encode webp: %w", err)
+		}
+		value := base64.StdEncoding.EncodeToString(buf.Bytes())
+		webpMu.Lock()
+		if len(webpCache) >= webpCacheMax {
+			clear(webpCache)
+		}
+		webpCache[code] = value
+		webpMu.Unlock()
+		return value, nil
+	})
 	if err != nil {
 		return "", err
 	}
-	var buf bytes.Buffer
-	if err := webp.Encode(&buf, img, webp.Options{Lossless: true}); err != nil {
-		return "", fmt.Errorf("encode webp: %w", err)
-	}
-	encoded := base64.StdEncoding.EncodeToString(buf.Bytes())
-	webpCache.Store(code, encoded)
-	return encoded, nil
+	return encoded.(string), nil
 }
