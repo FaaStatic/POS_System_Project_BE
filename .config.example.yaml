@@ -15,6 +15,15 @@ server:
   # Kosong = semua origin tanpa credentials (cocok untuk kasir mobile saja).
   # Cookie memakai SameSite=Strict, jadi CMS dan API harus satu site.
   cms_origins: []
+  # Versi di URL API: /api/{api_version}/{group}/{service}. Format v1, v2, ... (kosong = v1).
+  # CI/CD mengubahnya lewat SERVER_API_VERSION; FE harus dibangun ulang dengan
+  # API_VERSION yang sama.
+  api_version: v1
+  # Alamat publik API yang terlihat Midtrans (mis. https://api.tokoku.id). Wajib bila
+  # midtrans.server_key diisi: backend mengirimnya sebagai URL webhook di tiap charge
+  # (<public_url>/api/<versi>/sales/payments/notification), jadi URL di dashboard
+  # Midtrans hanya cadangan. Production harus https.
+  public_url:
 database:
   user:
   pass:

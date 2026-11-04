@@ -10,6 +10,8 @@ func GetCorsConfig(cmsOrigins []string) cors.Config {
 		AllowOrigins: []string{"*"},
 		AllowHeaders: []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Client"},
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE"},
+		// Tanpa ini browser menyembunyikan header export barcode dari JS klien.
+		ExposeHeaders: []string{"Content-Disposition", "X-Total-Parts", "X-Total-Items"},
 	}
 	if len(cmsOrigins) > 0 {
 		cfg.AllowOrigins = cmsOrigins

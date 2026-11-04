@@ -9,6 +9,17 @@ type AddTransactionResponse struct {
 	PaymentType      string               `json:"payment_type"`
 	StockConflict    bool                 `json:"stock_conflict"`
 	DebtInfo         *DebtTransactionInfo `json:"debt_info,omitempty"`
+	AmountPaid       *int64               `json:"amount_paid,omitempty"`
+	ChangeAmount     *int64               `json:"change_amount,omitempty"`
+}
+
+// ChangeLineResponse: satu bentuk kembalian (tunai, permen, atau produk lain).
+type ChangeLineResponse struct {
+	Kind        string     `json:"kind"`
+	Amount      int64      `json:"amount"`
+	ProductID   *uuid.UUID `json:"product_id,omitempty"`
+	ProductName string     `json:"product_name,omitempty"`
+	Qty         float64    `json:"qty,omitempty"`
 }
 
 type SyncTransactionsResponse struct {
@@ -45,13 +56,19 @@ type ProductTransactionResponse struct {
 }
 
 type TransactionResponse struct {
-	TransactionID      uuid.UUID                     `json:"transaction_id"`
-	InvoiceNumber      string                        `json:"invoice_number"`
-	PaymentType        int                           `json:"payment_type"`
-	TotalTransaction   int64                         `json:"total_transaction"`
-	TotalProfit        int64                         `json:"total_profit"`
-	StockConflict      bool                          `json:"stock_conflict"`
-	ConflictReviewed   bool                          `json:"conflict_reviewed"`
+	TransactionID    uuid.UUID            `json:"transaction_id"`
+	InvoiceNumber    string               `json:"invoice_number"`
+	PaymentType      int                  `json:"payment_type"`
+	TotalTransaction int64                `json:"total_transaction"`
+	TotalProfit      int64                `json:"total_profit"`
+	AmountPaid       *int64               `json:"amount_paid,omitempty"`
+	ChangeAmount     *int64               `json:"change_amount,omitempty"`
+	Change           []ChangeLineResponse `json:"change,omitempty"`
+	StockConflict    bool                 `json:"stock_conflict"`
+	ConflictReviewed bool                 `json:"conflict_reviewed"`
+	// Status: success or cancelled. CancelReason is set only when cancelled.
+	Status             string                        `json:"status"`
+	CancelReason       string                        `json:"cancel_reason,omitempty"`
 	CreatedAt          string                        `json:"created_at"`
 	TransactionDetails []*ProductTransactionResponse `json:"transaction_details"`
 }

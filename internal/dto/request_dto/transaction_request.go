@@ -7,6 +7,19 @@ type AddTransactionRequest struct {
 	CustomerId  *string                       `json:"customer_id,omitempty" validate:"omitempty,uuid"`
 	Bank        *string                       `json:"bank,omitempty" validate:"omitempty,oneof=bca mandiri"`
 	Details     []AddTransactionDetailRequest `json:"details" validate:"required,min=1,dive"`
+	// AmountPaid dan Change hanya untuk tunai. Bila AmountPaid dikirim, jumlah
+	// semua Change harus sama dengan AmountPaid dikurangi total belanja.
+	AmountPaid *int64              `json:"amount_paid,omitempty" validate:"omitempty,gt=0"`
+	Change     []ChangeLineRequest `json:"change,omitempty" validate:"omitempty,max=20,dive"`
+}
+
+// ChangeLineRequest: kind tunai memakai Amount; permen dan produk_lain memakai
+// ProductId + Qty (nilainya dihitung server dari harga jual produk).
+type ChangeLineRequest struct {
+	Kind      string  `json:"kind" validate:"required,oneof=tunai permen produk_lain"`
+	Amount    int64   `json:"amount,omitempty" validate:"omitempty,gt=0"`
+	ProductId *string `json:"product_id,omitempty" validate:"omitempty,uuid"`
+	Qty       float64 `json:"qty,omitempty"`
 }
 
 type AddTransactionDetailRequest struct {
@@ -32,6 +45,8 @@ type FilterTransactionRequest struct {
 	AfterTime     *string `query:"after_time,omitempty"`
 	AfterID       *string `query:"after_id,omitempty"`
 	OpenConflict  bool    `query:"open_conflict"`
+	// Status: success (default, as before), cancelled, or all.
+	Status string `query:"status" validate:"omitempty,oneof=success cancelled all"`
 }
 
 type DeleteTransactionRequest struct {
@@ -55,6 +70,8 @@ type OfflineTransaction struct {
 	TypePayment     string                     `json:"type_payment"`
 	CustomerId      *string                    `json:"customer_id,omitempty"`
 	Details         []OfflineTransactionDetail `json:"details"`
+	AmountPaid      *int64                     `json:"amount_paid,omitempty"`
+	Change          []ChangeLineRequest        `json:"change,omitempty"`
 }
 
 type OfflineTransactionDetail struct {

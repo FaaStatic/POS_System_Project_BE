@@ -36,8 +36,8 @@ func (f *fakeAuthUsecase) RefreshToken(ctx context.Context, dto *requestdto.User
 func newAuthApp(uc *fakeAuthUsecase) *fiber.App {
 	h := NewUserHandler(uc, nil, zap.NewNop(), WebCookieConfig{Secure: true, RefreshTTL: time.Hour})
 	app := fiber.New()
-	app.Post("/auth/login", h.Login)
-	app.Post("/auth/refresh", h.Refresh)
+	app.Post("/api/v1/account/auth/login", h.Login)
+	app.Post("/api/v1/account/auth/refresh", h.Refresh)
 	return app
 }
 
@@ -61,7 +61,7 @@ func TestLogin_WebClientGetsHttpOnlyCookieInsteadOfBodyToken(t *testing.T) {
 	app := newAuthApp(uc)
 	creds := `{"username":"owner","password":"secret1"}`
 
-	resp, body := send(t, app, "/auth/login", creds, map[string]string{"X-Client": "web"})
+	resp, body := send(t, app, "/api/v1/account/auth/login", creds, map[string]string{"X-Client": "web"})
 	cookie := resp.Header.Get("Set-Cookie")
 	for _, want := range []string{"refresh_token=refresh-1", "HttpOnly", "SameSite=Strict", "secure"} {
 		if !strings.Contains(strings.ToLower(cookie), strings.ToLower(want)) {
@@ -75,7 +75,7 @@ func TestLogin_WebClientGetsHttpOnlyCookieInsteadOfBodyToken(t *testing.T) {
 		t.Error("web login must be restricted to superadmin")
 	}
 
-	resp, body = send(t, app, "/auth/login", creds, nil)
+	resp, body = send(t, app, "/api/v1/account/auth/login", creds, nil)
 	if resp.Header.Get("Set-Cookie") != "" || !strings.Contains(body, "refresh-1") || uc.login.AdminOnly {
 		t.Errorf("mobile login changed: cookie=%q body=%s adminOnly=%v", resp.Header.Get("Set-Cookie"), body, uc.login.AdminOnly)
 	}
@@ -86,14 +86,14 @@ func TestRefresh_CookieOnlyHonouredWithWebHeader(t *testing.T) {
 	app := newAuthApp(uc)
 	cookie := map[string]string{"Cookie": "refresh_token=from-cookie", "X-Client": "web"}
 
-	resp, body := send(t, app, "/auth/refresh", "", cookie)
+	resp, body := send(t, app, "/api/v1/account/auth/refresh", "", cookie)
 	if resp.StatusCode != fiber.StatusOK || uc.refreshToken != "from-cookie" || strings.Contains(body, "refresh-2") {
 		t.Fatalf("web refresh: status=%d token=%q body=%s", resp.StatusCode, uc.refreshToken, body)
 	}
 
 	// Tanpa X-Client (mis. form dari situs lain) cookie tidak boleh dipakai.
 	uc.refreshToken = ""
-	resp, _ = send(t, app, "/auth/refresh", "{}", map[string]string{"Cookie": "refresh_token=from-cookie"})
+	resp, _ = send(t, app, "/api/v1/account/auth/refresh", "{}", map[string]string{"Cookie": "refresh_token=from-cookie"})
 	if resp.StatusCode != fiber.StatusBadRequest || uc.refreshToken != "" {
 		t.Errorf("cookie used without X-Client: status=%d token=%q", resp.StatusCode, uc.refreshToken)
 	}

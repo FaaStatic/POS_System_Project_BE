@@ -564,6 +564,9 @@ func (u *paymentUsecase) buildOrder(ctx context.Context, items []itemPair) (int6
 		if product.ProductType.IsDigital() {
 			return 0, nil, domain.Validation("digital products cannot be purchased via online payment")
 		}
+		if err := domain.CheckQty(product.Unit, it.qty); err != nil {
+			return 0, nil, err
+		}
 		if product.Stock < it.qty {
 			return 0, nil, domain.Conflict(fmt.Sprintf("insufficient stock for product %s", it.productID))
 		}

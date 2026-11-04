@@ -3,6 +3,7 @@ package usecase
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"mime/multipart"
 	"shop_project_be/internal/constant/enum"
@@ -31,6 +32,11 @@ type fakeProdRepo struct {
 	updatedDelta  float64
 
 	current *domain.Products
+
+	exportItems  []*domain.Products
+	exportTotal  int64
+	exportLimit  int
+	exportOffset int
 
 	categories    map[string]uuid.UUID // key -> id, kategori yang sudah ada
 	createdKeys   []string
@@ -84,6 +90,11 @@ func (f *fakeProdRepo) GetProduct(ctx context.Context, id uuid.UUID) (*domain.Pr
 		return nil, domain.NotFound("product not found")
 	}
 	return f.current, nil
+}
+
+func (f *fakeProdRepo) ListForExport(ctx context.Context, filter domain.FilterAllProduct, limit, offset int) ([]*domain.Products, int64, error) {
+	f.exportLimit, f.exportOffset = limit, offset
+	return f.exportItems, f.exportTotal, nil
 }
 
 func (f *fakeProdRepo) AddProduct(ctx context.Context, product *domain.Products) error {
@@ -362,6 +373,28 @@ func TestAddBulkProduct_UpsertRules(t *testing.T) {
 	}
 }
 
+// FE menambahkan prefix data URI sendiri, jadi image dan barcode_image harus sama-sama
+// base64 mentah; salah satunya berprefix membuat gambar itu gagal tampil.
+func TestToProductResponse_ImagesAreRawBase64(t *testing.T) {
+	barcode := "GULA-1a2b3c4d"
+	got := toProductResponse(&domain.Products{SKU: "GULA", Barcode: &barcode, Image: "UklGRgAA"})
+
+	if got.Image != "UklGRgAA" {
+		t.Errorf("image = %q, want it passed through as stored", got.Image)
+	}
+	if got.BarcodeImage == "" || strings.HasPrefix(got.BarcodeImage, "data:") {
+		t.Fatalf("barcode_image must be non-empty raw base64, got %.30q", got.BarcodeImage)
+	}
+	raw, err := base64.StdEncoding.DecodeString(got.BarcodeImage)
+	if err != nil || len(raw) < 12 || string(raw[:4]) != "RIFF" || string(raw[8:12]) != "WEBP" {
+		t.Fatalf("barcode_image must decode to a webp (err %v)", err)
+	}
+
+	if none := toProductResponse(&domain.Products{SKU: "X"}); none.BarcodeImage != "" {
+		t.Errorf("a product without barcode must have an empty barcode_image, got %.30q", none.BarcodeImage)
+	}
+}
+
 func TestNormalizeBarcode(t *testing.T) {
 	if got, err := normalizeBarcode("  "); got != nil || err != nil {
 		t.Errorf("blank = %v, %v; want nil (no barcode)", got, err)
@@ -376,15 +409,136 @@ func TestNormalizeBarcode(t *testing.T) {
 	}
 }
 
-func TestUpdateProduct_BlankBarcodeClearsIt(t *testing.T) {
-	repo := &fakeProdRepo{}
+func TestUpdateProduct_BlankBarcodeRegeneratesIt(t *testing.T) {
+	manual := "8991234567890"
+	current := &domain.Products{ID: uuid.New(), SKU: "GULA", Barcode: &manual}
+	repo := &fakeProdRepo{current: current}
 	u := newTestProductUsecase(repo)
 	blank := ""
-	if err := u.UpdateProductShopWithLock(context.Background(), &requestdto.UpdateProduct{ID: uuid.NewString(), Barcode: &blank}); err != nil {
+	if err := u.UpdateProductShopWithLock(context.Background(), &requestdto.UpdateProduct{ID: current.ID.String(), Barcode: &blank}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if v, ok := repo.updatedFields["barcode"]; !ok || v != nil {
-		t.Errorf("barcode field = %v (present %v); want explicit nil to store NULL", v, ok)
+	if got, want := repo.updatedFields["barcode"], domain.AutoBarcode("GULA", current.ID); got != want {
+		t.Errorf("barcode = %v; want auto %v", got, want)
+	}
+}
+
+func TestUpdateProduct_SKUChangeFollowsAutoBarcodeOnly(t *testing.T) {
+	id := uuid.New()
+	auto := domain.AutoBarcode("GULA", id)
+	manual := "8991234567890"
+	newSKU := "GULA-PASIR"
+	tests := []struct {
+		name    string
+		barcode *string
+		want    any // nil = barcode tidak disentuh
+	}{
+		{"auto barcode follows new sku", &auto, domain.AutoBarcode(newSKU, id)},
+		{"missing barcode gets auto", nil, domain.AutoBarcode(newSKU, id)},
+		{"manual barcode is kept", &manual, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeProdRepo{current: &domain.Products{ID: id, SKU: "GULA", Barcode: tt.barcode}}
+			u := newTestProductUsecase(repo)
+			if err := u.UpdateProductShopWithLock(context.Background(), &requestdto.UpdateProduct{ID: id.String(), SKU: &newSKU}); err != nil {
+				t.Fatalf("update: %v", err)
+			}
+			if got := repo.updatedFields["barcode"]; got != tt.want {
+				t.Errorf("barcode = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddProduct_BlankBarcodeGetsAuto(t *testing.T) {
+	repo := &fakeProdRepo{categories: map[string]uuid.UUID{}}
+	u := newTestProductUsecase(repo)
+	price, stock := int64(1000), 5.0
+	sell, debt := int64(1500), int64(1600)
+	err := u.AddProductShopWithLock(context.Background(), &requestdto.AddProduct{
+		SKU: "GULA 1/2", ProductName: "Gula", PurchasePrice: &price, SellingPrice: &sell, SellingPriceDebt: &debt, Stock: &stock,
+	})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if repo.added == nil || repo.added.Barcode == nil || *repo.added.Barcode != domain.AutoBarcode("GULA 1/2", repo.added.ID) {
+		t.Fatalf("barcode = %v; want auto from sku and id", repo.added)
+	}
+	if !barcodePattern.MatchString(*repo.added.Barcode) {
+		t.Errorf("auto barcode %q must satisfy barcodePattern", *repo.added.Barcode)
+	}
+}
+
+func TestExportBarcodes_Parts(t *testing.T) {
+	code := "GULA-1a2b3c4d"
+	items := []*domain.Products{{SKU: "GULA", ProductName: "Gula", Barcode: &code}}
+
+	tests := []struct {
+		name       string
+		total      int64
+		part       int
+		wantParts  int
+		wantOffset int
+		wantErr    bool
+	}{
+		{"no products still yields one empty part", 0, 0, 1, 0, false},
+		{"exactly one full part", 500, 1, 1, 0, false},
+		{"501 products need two parts", 501, 2, 2, 500, false},
+		{"last of three parts", 1201, 3, 3, 1000, false},
+		{"part beyond the last", 1201, 4, 0, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeProdRepo{exportItems: items, exportTotal: tt.total}
+			u := newTestProductUsecase(repo)
+
+			got, err := u.ExportBarcodes(context.Background(), &requestdto.ExportBarcodes{Part: tt.part})
+			if tt.wantErr {
+				if !errors.Is(err, domain.ErrValidation) {
+					t.Fatalf("err = %v, want validation error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("export: %v", err)
+			}
+			if got.TotalParts != tt.wantParts || got.TotalItems != int(tt.total) {
+				t.Errorf("parts/items = %d/%d, want %d/%d", got.TotalParts, got.TotalItems, tt.wantParts, tt.total)
+			}
+			if repo.exportLimit != 500 || repo.exportOffset != tt.wantOffset {
+				t.Errorf("limit/offset = %d/%d, want 500/%d", repo.exportLimit, repo.exportOffset, tt.wantOffset)
+			}
+			if len(got.File) == 0 || !strings.HasSuffix(got.Name, ".xlsx") {
+				t.Errorf("want a non-empty .xlsx, got %q (%d bytes)", got.Name, len(got.File))
+			}
+		})
+	}
+}
+
+func TestAddBulkProduct_BlankBarcodeGetsAuto(t *testing.T) {
+	existingID := uuid.New()
+	repo := &fakeProdRepo{
+		existingBySKU: map[string]*domain.Products{"LAMA": {ID: existingID, SKU: "LAMA"}}, // barcode NULL
+	}
+	u := newTestProductUsecase(repo)
+
+	csv := "sku,barcode,product_name,purchase_price,selling_price,selling_price_debt\n" +
+		"BARU,,Baru,1000,1500,1600\n" +
+		"LAMA,,Lama,1000,1500,1600\n"
+	if _, err := u.AddBulkProductShopWithLock(context.Background(), &requestdto.AddBulkProduct{FileUpload: bulkUpload(t, csv)}); err != nil {
+		t.Fatalf("import failed: %v", err)
+	}
+	for _, p := range repo.upserted {
+		if p.Barcode == nil || *p.Barcode != domain.AutoBarcode(p.SKU, p.ID) {
+			t.Errorf("%s: barcode = %v; want auto from sku and id", p.SKU, p.Barcode)
+		}
+		if p.SKU == "LAMA" && p.ID != existingID {
+			t.Errorf("existing sku must keep its id, got %s", p.ID)
+		}
+	}
+	if len(repo.upserted) != 2 {
+		t.Fatalf("upserted %d rows, want 2", len(repo.upserted))
 	}
 }
 

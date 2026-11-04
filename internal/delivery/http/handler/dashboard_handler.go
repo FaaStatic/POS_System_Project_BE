@@ -27,7 +27,7 @@ func NewDashboardHandler(usecase domain.DashboardUsecase) *DashboardHandler {
 //	@Param			date_end	query		string	false	"YYYY-MM-DD, inclusive"
 //	@Success		200			{object}	response.APIResponse
 //	@Failure		400			{object}	response.APIResponse
-//	@Router			/api/dashboard/summary [get]
+//	@Router			/api/v1/insight/dashboard/summary [get]
 func (h *DashboardHandler) Summary(c fiber.Ctx) error {
 	var req requestdto.DashboardRequest
 	if err := bindQuery(c, &req); err != nil {

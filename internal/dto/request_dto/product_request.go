@@ -63,6 +63,14 @@ type GetAllProduct struct {
 	Order      string  `query:"order" validate:"omitempty,oneof=asc desc ASC DESC"`
 }
 
+// ExportBarcodes memakai filter yang sama dengan GetAllProduct; Part dimulai dari 1
+// dan satu part berisi paling banyak 500 produk.
+type ExportBarcodes struct {
+	CategoryID string `query:"category_id" validate:"omitempty,uuid"`
+	Search     string `query:"search"`
+	Part       int    `query:"part" validate:"omitempty,min=1"`
+}
+
 type CategoryRequest struct {
 	Name string `json:"name" validate:"required,max=100"`
 }

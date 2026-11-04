@@ -10,6 +10,7 @@ import (
 	"shop_project_be/internal/domain"
 	requestdto "shop_project_be/internal/dto/request_dto"
 	responsedto "shop_project_be/internal/dto/response_dto"
+	"shop_project_be/pkg/barcodeimg"
 	"shop_project_be/pkg/sheet"
 	"strings"
 
@@ -64,10 +65,17 @@ func toProductResponse(item *domain.Products) responsedto.ProductDtoResponse {
 	if item.Category != nil {
 		category = item.Category.Name
 	}
+	// Barcode sudah lolos barcodePattern (ASCII), jadi encode Code128 tidak bisa
+	// gagal; bila tetap gagal, gambar dikosongkan dan kodenya masih terkirim.
+	var barcodeImage string
+	if item.Barcode != nil {
+		barcodeImage, _ = barcodeimg.WebPBase64(*item.Barcode)
+	}
 	return responsedto.ProductDtoResponse{
 		ID:               item.ID,
 		SKU:              item.SKU,
 		Barcode:          item.Barcode,
+		BarcodeImage:     barcodeImage,
 		ProductName:      item.ProductName,
 		Unit:             int(item.Unit),
 		ProductType:      int(item.ProductType),
@@ -142,6 +150,12 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 		return nil, domain.Validation(fmt.Sprintf("failed to parse file: %v", err))
 	}
 
+	// SKU kosong = produk baru dengan SKU otomatis.
+	if err := p.assignAutoSKUs(ctx, rows, newAutoSKU); err != nil {
+		p.log.Error("failed to assign automatic skus", zap.Error(err))
+		return nil, fmt.Errorf("failed to import products: %w", domain.ErrInternal)
+	}
+
 	report := &responsedto.ProductBulkImportResponse{
 		UpdatedSKUs:     []string{},
 		DuplicateInFile: []string{},
@@ -184,7 +198,12 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 
 	products := make([]*domain.Products, 0, len(unique))
 	categories := make([]string, 0, len(unique))
-	for _, row := range unique {
+	// Konversi gambar berjalan paralel dan hasilnya sejajar dengan unique.
+	images, err := convertRowImages(unique)
+	if err != nil {
+		return nil, err
+	}
+	for i, row := range unique {
 		current := existing[row.SKU]
 
 		// Sel unit/product_type kosong pada SKU lama mempertahankan nilai lama;
@@ -216,10 +235,19 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 			continue
 		}
 		barcodeFromFile := barcode != nil
-		if barcode == nil && current != nil {
+		// ID produk baru dibuat di sini karena barcode otomatis memakainya; untuk
+		// SKU lama, ID tetap milik baris yang ada (upsert tidak mengubah id).
+		id := uuid.New()
+		if current != nil {
+			id = current.ID
+		}
+		if barcode == nil && current != nil && current.Barcode != nil {
 			// Sel kosong mempertahankan barcode lama, supaya file tanpa kolom
 			// barcode tidak menghapus barcode yang sudah terdaftar.
 			barcode = current.Barcode
+		} else if barcode == nil {
+			auto := domain.AutoBarcode(row.SKU, id)
+			barcode = &auto
 		} else if barcodeFromFile {
 			if owner := barcodeOwners[*barcode]; owner != nil && owner.SKU != row.SKU {
 				rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: fmt.Sprintf("barcode %s is already used by sku %s", *barcode, owner.SKU)})
@@ -231,11 +259,21 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 			}
 		}
 
+		if err := domain.CheckQty(unit, row.Stock); err != nil {
+			rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: err.Error()})
+			continue
+		}
+
 		purchase := int64(math.Round(row.PurchasePrice))
 		selling := int64(math.Round(row.SellingPrice))
 		sellingDebt := int64(math.Round(row.SellingPriceDebt))
 		if err := validatePrices(purchase, selling, sellingDebt); err != nil {
 			rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: err.Error()})
+			continue
+		}
+		imageB64, err := images[i].value, images[i].err
+		if err != nil {
+			rowErrors = append(rowErrors, sheet.RowError{Line: row.Line, Message: "image: " + err.Error()})
 			continue
 		}
 		// Dicatat setelah semua validasi: baris yang ditolak tidak boleh
@@ -244,6 +282,7 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 			barcodeRows[*barcode] = row.Line
 		}
 		products = append(products, &domain.Products{
+			ID:               id,
 			SKU:              row.SKU,
 			Barcode:          barcode,
 			ProductName:      row.ProductName,
@@ -253,7 +292,7 @@ func (p *productUsecase) AddBulkProductShopWithLock(ctx context.Context, request
 			SellingPrice:     selling,
 			SellingPriceDebt: sellingDebt,
 			Stock:            row.Stock,
-			Image:            row.Image,
+			Image:            imageB64,
 		})
 		categories = append(categories, row.Category)
 		if current != nil {
@@ -308,7 +347,14 @@ func (p *productUsecase) AddProductShopWithLock(ctx context.Context, request *re
 	if err != nil {
 		return err
 	}
+	// ID dibuat di sini (bukan oleh DB) karena barcode otomatis memakainya.
+	id := uuid.New()
+	if barcode == nil {
+		auto := domain.AutoBarcode(request.SKU, id)
+		barcode = &auto
+	}
 	err = p.productRepo.AddProduct(ctx, &domain.Products{
+		ID:               id,
 		SKU:              request.SKU,
 		Barcode:          barcode,
 		ProductName:      request.ProductName,
@@ -388,6 +434,51 @@ func (p *productUsecase) GetAllProductShop(ctx context.Context, request *request
 	return &responses, nil
 }
 
+const barcodeExportPartSize = 500
+
+func (p *productUsecase) ExportBarcodes(ctx context.Context, request *requestdto.ExportBarcodes) (*responsedto.BarcodeExport, error) {
+	part := max(request.Part, 1)
+	filter := domain.FilterAllProduct{Search: request.Search}
+	if request.CategoryID != "" {
+		id, err := uuid.Parse(request.CategoryID)
+		if err != nil {
+			return nil, domain.InvalidID("invalid category id format")
+		}
+		filter.CategoryID = &id
+	}
+
+	items, total, err := p.productRepo.ListForExport(ctx, filter, barcodeExportPartSize, (part-1)*barcodeExportPartSize)
+	if err != nil {
+		p.log.Error("failed to list products for barcode export", zap.Error(err))
+		return nil, fmt.Errorf("failed to export barcodes: %w", domain.ErrInternal)
+	}
+	totalParts := max(1, int((total+barcodeExportPartSize-1)/barcodeExportPartSize))
+	if part > totalParts {
+		return nil, domain.Validation(fmt.Sprintf("part %d is out of range; there are %d part(s)", part, totalParts))
+	}
+
+	rows := make([]sheet.BarcodeRow, 0, len(items))
+	for _, item := range items {
+		img, err := barcodeimg.PNG(*item.Barcode)
+		if err != nil {
+			p.log.Error("failed to render barcode", zap.String("sku", item.SKU), zap.Error(err))
+			return nil, fmt.Errorf("failed to export barcodes: %w", domain.ErrInternal)
+		}
+		rows = append(rows, sheet.BarcodeRow{Name: item.ProductName, Code: *item.Barcode, PNG: img})
+	}
+	file, err := sheet.WriteBarcodeSheet(rows)
+	if err != nil {
+		p.log.Error("failed to write barcode sheet", zap.Error(err))
+		return nil, fmt.Errorf("failed to export barcodes: %w", domain.ErrInternal)
+	}
+	return &responsedto.BarcodeExport{
+		File:       file,
+		Name:       fmt.Sprintf("barcode-produk-part-%d-of-%d.xlsx", part, totalParts),
+		TotalParts: totalParts,
+		TotalItems: int(total),
+	}, nil
+}
+
 func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request *requestdto.UpdateProduct) error {
 	id, err := uuid.Parse(request.ID)
 	if err != nil {
@@ -399,16 +490,41 @@ func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request 
 	if request.SKU != nil {
 		fields["sku"] = *request.SKU
 	}
+	var manualBarcode *string
 	if request.Barcode != nil {
 		barcode, err := normalizeBarcode(*request.Barcode)
 		if err != nil {
 			return err
 		}
-		var value any // nil = kolom dikosongkan (NULL)
+		manualBarcode = barcode
 		if barcode != nil {
-			value = *barcode
+			fields["barcode"] = *barcode
 		}
-		fields["barcode"] = value
+	}
+	// Barcode tidak pernah dikosongkan: kosong atau SKU berubah memicu barcode
+	// otomatis. Barcode manual/pabrik hanya diganti bila diminta eksplisit.
+	barcodeCleared := request.Barcode != nil && manualBarcode == nil
+	skuChanged := request.SKU != nil && request.Barcode == nil
+	pricesChanged := request.PurchasePrice != nil || request.SellingPrice != nil || request.SellingPriceDebt != nil
+
+	// Dibaca di luar lock repo, sekali per request; race dua PATCH bersamaan
+	// ditahan oleh chk_products_price_rules (migrasi 00004).
+	var existing *domain.Products
+	if barcodeCleared || skuChanged || pricesChanged {
+		existing, err = p.productRepo.GetProduct(ctx, id)
+		if err != nil {
+			return passOrInternal(p.log, err, "failed to update product", domain.ErrNotFound)
+		}
+	}
+	if barcodeCleared || skuChanged {
+		sku := existing.SKU
+		if request.SKU != nil {
+			sku = *request.SKU
+		}
+		wasAuto := existing.Barcode != nil && *existing.Barcode == domain.AutoBarcode(existing.SKU, existing.ID)
+		if request.Barcode != nil || existing.Barcode == nil || wasAuto {
+			fields["barcode"] = domain.AutoBarcode(sku, existing.ID)
+		}
 	}
 	if request.ProductName != nil {
 		fields["product_name"] = *request.ProductName
@@ -447,14 +563,8 @@ func (p *productUsecase) UpdateProductShopWithLock(ctx context.Context, request 
 		return domain.Validation("no fields to update")
 	}
 
-	if request.PurchasePrice != nil || request.SellingPrice != nil || request.SellingPriceDebt != nil {
-		// Dibaca di luar lock repo; race dua PATCH bersamaan ditahan oleh
-		// chk_products_price_rules (migrasi 00004).
-		current, err := p.productRepo.GetProduct(ctx, id)
-		if err != nil {
-			return passOrInternal(p.log, err, "failed to update product", domain.ErrNotFound)
-		}
-		purchase, selling, sellingDebt := current.PurchasePrice, current.SellingPrice, current.SellingPriceDebt
+	if pricesChanged {
+		purchase, selling, sellingDebt := existing.PurchasePrice, existing.SellingPrice, existing.SellingPriceDebt
 		if request.PurchasePrice != nil {
 			purchase = *request.PurchasePrice
 		}

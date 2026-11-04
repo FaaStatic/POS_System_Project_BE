@@ -7,9 +7,12 @@ import (
 )
 
 type ProductDtoResponse struct {
-	ID               uuid.UUID  `json:"id"`
-	SKU              string     `json:"sku"`
-	Barcode          *string    `json:"barcode"`
+	ID      uuid.UUID `json:"id"`
+	SKU     string    `json:"sku"`
+	Barcode *string   `json:"barcode"`
+	// BarcodeImage: base64 mentah dari WebP (Code128) untuk Barcode, tanpa prefix data
+	// URI seperti Image; kosong bila barcode kosong.
+	BarcodeImage     string     `json:"barcode_image"`
 	ProductName      string     `json:"product_name"`
 	Unit             int        `json:"unit"`
 	ProductType      int        `json:"product_type"`
@@ -21,6 +24,15 @@ type ProductDtoResponse struct {
 	Category         string     `json:"category"`
 	Image            string     `json:"image"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+}
+
+// BarcodeExport: File adalah isi .xlsx; handler mengirimnya sebagai unduhan dan
+// menaruh Part/TotalParts/TotalItems di header supaya klien tahu part berikutnya.
+type BarcodeExport struct {
+	File       []byte
+	Name       string
+	TotalParts int
+	TotalItems int
 }
 
 type ProductBulkImportResponse struct {

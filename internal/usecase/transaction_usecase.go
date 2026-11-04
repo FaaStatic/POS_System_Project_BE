@@ -134,6 +134,10 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 			return nil, domain.NotFound(fmt.Sprintf("product with id %s not found", productId))
 		}
 
+		if err := domain.CheckQty(product.Unit, detail.Qty); err != nil {
+			return nil, err
+		}
+
 		unitPrice := product.SellingPrice
 		if isHutang {
 			unitPrice = product.SellingPriceDebt
@@ -178,6 +182,11 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 		})
 	}
 
+	changeDue, changeLines, err := t.buildChange(ctx, dto, paymentType, total)
+	if err != nil {
+		return nil, err
+	}
+
 	data := &domain.Transactions{
 		NoInvoice:         noInvoice,
 		UserID:            userId,
@@ -186,6 +195,9 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 		Bank:              bank,
 		TotalTransaction:  total,
 		TransactionDetail: detailTrx,
+	}
+	if dto.AmountPaid != nil {
+		data.AmountPaid, data.ChangeAmount, data.Change = dto.AmountPaid, &changeDue, changeLines
 	}
 	if offline != nil {
 		data.ClientRef = &offline.clientRef
@@ -207,6 +219,8 @@ func (t *transactionUsecase) addTransaction(ctx context.Context, dto *requestdto
 		TotalTransaction: data.TotalTransaction,
 		PaymentType:      paymentType.String(),
 		StockConflict:    data.StockConflict,
+		AmountPaid:       data.AmountPaid,
+		ChangeAmount:     data.ChangeAmount,
 	}
 	if debtSnapshot != nil {
 		resp.DebtInfo = &responsedto.DebtTransactionInfo{
@@ -299,6 +313,7 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 		Order:        dto.Order,
 		TypeTrx:      dto.TypePayment,
 		OpenConflict: dto.OpenConflict,
+		Status:       dto.Status,
 	}
 
 	result, err := t.trxRepo.GetAllTransaction(ctx, *filter)
@@ -318,8 +333,13 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 			InvoiceNumber:      trx.NoInvoice,
 			PaymentType:        int(trx.PaymentType),
 			TotalTransaction:   trx.TotalTransaction,
+			AmountPaid:         trx.AmountPaid,
+			ChangeAmount:       trx.ChangeAmount,
+			Change:             toChangeResponse(trx.Change),
 			StockConflict:      trx.StockConflict,
 			ConflictReviewed:   trx.ConflictReviewedAt != nil,
+			Status:             trxStatus(trx),
+			CancelReason:       derefString(trx.CancelReason),
 			CreatedAt:          trx.CreatedAt.Format(time.RFC3339),
 			TransactionDetails: details,
 		})
@@ -334,6 +354,21 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 		HasNext:         result.HasNext,
 		TransactionList: responses,
 	}, nil
+}
+
+// trxStatus: a transaction is cancelled when it was soft-deleted.
+func trxStatus(trx *domain.Transactions) string {
+	if trx.DeletedAt.Valid {
+		return "cancelled"
+	}
+	return "success"
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func toProductTrxResponse(d domain.TransactionsDetail) *responsedto.ProductTransactionResponse {
@@ -371,8 +406,13 @@ func (t *transactionUsecase) GetTransaction(ctx context.Context, dto *requestdto
 		PaymentType:        int(result.PaymentType),
 		TotalTransaction:   result.TotalTransaction,
 		TotalProfit:        totalProfit,
+		AmountPaid:         result.AmountPaid,
+		ChangeAmount:       result.ChangeAmount,
+		Change:             toChangeResponse(result.Change),
 		StockConflict:      result.StockConflict,
 		ConflictReviewed:   result.ConflictReviewedAt != nil,
+		Status:             trxStatus(result),
+		CancelReason:       derefString(result.CancelReason),
 		CreatedAt:          result.CreatedAt.Format(time.RFC3339),
 		TransactionDetails: transactionDetail,
 	}
@@ -537,6 +577,9 @@ func (t *transactionUsecase) PrintReportTransaction(ctx context.Context, dto *re
 	if err != nil {
 		return nil, passOrInternal(t.log, err, "failed to get transaction", domain.ErrNotFound)
 	}
+	if trx.DeletedAt.Valid {
+		return nil, domain.Conflict("transaction was cancelled; no receipt is printed for it")
+	}
 
 	items := make([]pdf.TransactionReportItem, 0, len(trx.TransactionDetail))
 	for _, d := range trx.TransactionDetail {
@@ -552,16 +595,27 @@ func (t *transactionUsecase) PrintReportTransaction(ctx context.Context, dto *re
 	if trx.CustomerID != nil {
 		customerName = trx.Customer.Name
 	}
+	var amountPaid, changeAmount int64
+	if trx.AmountPaid != nil && trx.ChangeAmount != nil {
+		amountPaid, changeAmount = *trx.AmountPaid, *trx.ChangeAmount
+	}
+	changeRows := make([]pdf.TransactionReportChange, 0, len(trx.Change))
+	for _, c := range trx.Change {
+		changeRows = append(changeRows, pdf.TransactionReportChange{Kind: c.Kind, ProductName: c.ProductName, Qty: c.Qty, Amount: c.Amount})
+	}
 	urlPdf, err := pdf.GenerateTransactionReport(pdf.TransactionReportData{
-		StoreName:   t.storeName,
-		NoInvoice:   trx.NoInvoice,
-		Cashier:     trx.User.Username,
-		Customer:    customerName,
-		PaymentType: trx.PaymentType.String(),
-		CreatedAt:   trx.CreatedAt,
-		Items:       items,
-		Total:       trx.TotalTransaction,
-		GeneratedAt: time.Now(),
+		StoreName:    t.storeName,
+		NoInvoice:    trx.NoInvoice,
+		Cashier:      trx.User.Username,
+		Customer:     customerName,
+		PaymentType:  trx.PaymentType.String(),
+		CreatedAt:    trx.CreatedAt,
+		Items:        items,
+		Total:        trx.TotalTransaction,
+		AmountPaid:   amountPaid,
+		ChangeAmount: changeAmount,
+		Change:       changeRows,
+		GeneratedAt:  time.Now(),
 	})
 	if err != nil {
 		t.log.Error("failed to generate transaction report pdf", zap.Error(err))
