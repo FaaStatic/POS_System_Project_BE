@@ -59,7 +59,7 @@ func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, scopes ...fu
 	return &debt, nil
 }
 
-func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID) error {
+func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID, note string) error {
 	return runTxDB(ctx, d.db, func(tx *gorm.DB) error {
 		if err := lockCustomerShared(tx, debt.CustomerID); err != nil {
 			return err
@@ -91,6 +91,9 @@ func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts, userID
 			}
 		}
 		adjustment := &domain.DebtAdjustments{DebtID: debtID, UserID: userID, Amount: debt.TotalDebt}
+		if note != "" {
+			adjustment.Note = &note
+		}
 		if err := tx.Create(adjustment).Error; err != nil {
 			return internalErr(fmt.Errorf("failed to record debt adjustment: %w", err))
 		}
@@ -223,4 +226,114 @@ func (d *debtRepository) GetAllDebt(ctx context.Context, filter domain.FilterDeb
 		HasNext: hasNext,
 		Cursor:  next,
 	}, nil
+}
+
+// GetAllDebtPayments memuat cicilan terbaru lebih dulu, per halaman dengan kursor
+// (tanggal_bayar, id). Cicilan dari hutang yang sudah lunas ikut tampil.
+func (d *debtRepository) GetAllDebtPayments(ctx context.Context, filter domain.FilterDebtPayment) (*domain.DebtPaymentsPaginated, error) {
+	limit, order := pageParams(filter.Limit, filter.Order)
+
+	query := d.db.WithContext(ctx).Model(&domain.DebtPayments{}).
+		Preload("User").
+		Preload("Debt", unscoped).
+		Preload("Debt.Customer", unscoped).
+		Joins("JOIN debts ON debts.id = debt_payments.debt_id")
+	if filter.CustomerID != uuid.Nil {
+		query = query.Where("debts.customer_id = ?", filter.CustomerID)
+	}
+	if filter.Search != "" {
+		query = query.Joins("JOIN customers ON customers.id = debts.customer_id").
+			Where("customers.name ILIKE ? ESCAPE '\\'", likeContains(filter.Search))
+	}
+	if filter.Cursor != nil {
+		op := "<"
+		if order == "ASC" {
+			op = ">"
+		}
+		// security: op hanya "<" atau ">" dari pageParams; nilai kursor lewat placeholder.
+		query = query.Where(fmt.Sprintf("(debt_payments.tanggal_bayar, debt_payments.id) %s (?, ?)", op),
+			filter.Cursor.AfterTime, filter.Cursor.AfterID)
+	}
+	query = query.Select("debt_payments.*").
+		Order(fmt.Sprintf("debt_payments.tanggal_bayar %[1]s, debt_payments.id %[1]s", order)).
+		Limit(limit + 1)
+
+	var items []*domain.DebtPayments
+	if err := query.Find(&items).Error; err != nil {
+		return nil, fmt.Errorf("failed to get debt payments: %w", err)
+	}
+	items, hasNext, next := trimPage(items, limit, func(p *domain.DebtPayments) (time.Time, uuid.UUID) { return p.TanggalBayar, p.ID })
+	return &domain.DebtPaymentsPaginated{Data: items, HasNext: hasNext, Cursor: next}, nil
+}
+
+func (d *debtRepository) GetDebtPaymentByID(ctx context.Context, id uuid.UUID) (*domain.DebtPayments, error) {
+	var payment domain.DebtPayments
+	err := d.db.WithContext(ctx).
+		Preload("User").
+		Preload("Debt", unscoped).
+		Preload("Debt.Customer", unscoped).
+		Where("id = ?", id).First(&payment).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, domain.NotFound(fmt.Sprintf("debt payment with id %s not found", id))
+		}
+		return nil, internalErr(fmt.Errorf("failed to get debt payment: %w", err))
+	}
+	return &payment, nil
+}
+
+// maxMonthPayments membatasi satu rekap bulanan; toko kecil jauh di bawahnya.
+const maxMonthPayments = 5000
+
+func (d *debtRepository) GetDebtPaymentsInRange(ctx context.Context, from, until time.Time) ([]*domain.DebtPayments, error) {
+	var items []*domain.DebtPayments
+	err := d.db.WithContext(ctx).
+		Preload("User").
+		Preload("Debt", unscoped).
+		Preload("Debt.Customer", unscoped).
+		Where("tanggal_bayar >= ? AND tanggal_bayar < ?", from, until).
+		Order("tanggal_bayar ASC, id ASC").
+		Limit(maxMonthPayments + 1).
+		Find(&items).Error
+	if err != nil {
+		return nil, internalErr(fmt.Errorf("failed to get debt payments: %w", err))
+	}
+	if len(items) > maxMonthPayments {
+		return nil, domain.Validation(fmt.Sprintf("more than %d debt payments in this month, too many for one report", maxMonthPayments))
+	}
+	return items, nil
+}
+
+// GetDebtEntries menggabungkan penjualan hutang (yang belum dibatalkan) dan hutang manual
+// untuk satu hutang, terbaru dulu, paling banyak limit baris. Keduanya diambil sebanyak
+// limit lalu digabung, jadi hasil gabungan selalu cukup.
+func (d *debtRepository) GetDebtEntries(ctx context.Context, debtID uuid.UUID, limit int) ([]domain.DebtEntry, error) {
+	var sales []domain.Transactions
+	if err := d.db.WithContext(ctx).Select("id", "no_invoice", "total_transaction", "created_at").
+		Where("debt_id = ?", debtID).
+		Order("created_at DESC, id DESC").Limit(limit).Find(&sales).Error; err != nil {
+		return nil, internalErr(fmt.Errorf("failed to get debt sales: %w", err))
+	}
+	var manual []domain.DebtAdjustments
+	if err := d.db.WithContext(ctx).Where("debt_id = ?", debtID).
+		Order("created_at DESC, id DESC").Limit(limit).Find(&manual).Error; err != nil {
+		return nil, internalErr(fmt.Errorf("failed to get debt adjustments: %w", err))
+	}
+
+	entries := make([]domain.DebtEntry, 0, len(sales)+len(manual))
+	for _, s := range sales {
+		entries = append(entries, domain.DebtEntry{Type: domain.DebtEntrySale, Amount: s.TotalTransaction, At: s.CreatedAt, Invoice: s.NoInvoice})
+	}
+	for _, m := range manual {
+		entry := domain.DebtEntry{Type: domain.DebtEntryManual, Amount: m.Amount, At: m.CreatedAt}
+		if m.Note != nil {
+			entry.Note = *m.Note
+		}
+		entries = append(entries, entry)
+	}
+	slices.SortStableFunc(entries, func(a, b domain.DebtEntry) int { return b.At.Compare(a.At) })
+	if len(entries) > limit {
+		entries = entries[:limit]
+	}
+	return entries, nil
 }

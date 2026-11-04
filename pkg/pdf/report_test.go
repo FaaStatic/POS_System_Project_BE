@@ -141,3 +141,33 @@ func assertFileExists(t *testing.T, url string) {
 		t.Fatalf("file %s empty", path)
 	}
 }
+
+func TestGenerateDebtPaymentReceipt(t *testing.T) {
+	for _, remaining := range []int64{5000, 0} {
+		url, err := GenerateDebtPaymentReceipt(DebtPaymentReceiptData{
+			Number: "HTG-A1-0007", Customer: "Budi", Cashier: "kasir1", PaidAt: time.Now(),
+			PreviousRemaining: 20000, Paid: 15000, Remaining: remaining, GeneratedAt: time.Now(),
+		})
+		if err != nil {
+			t.Fatalf("GenerateDebtPaymentReceipt error: %v", err)
+		}
+		assertFileExists(t, url)
+	}
+}
+
+func TestGenerateDebtPaymentsMonthSpansPagesAndHandlesEmpty(t *testing.T) {
+	rows := make([]DebtPaymentsMonthRow, 80)
+	for i := range rows {
+		rows[i] = DebtPaymentsMonthRow{
+			Customer: "Toko Sembako Berkah Jaya Makmur Sentosa Abadi Cabang Pasar Minggu", Cashier: "kasir-dengan-nama-panjang-sekali",
+			PaidAt: time.Date(2026, 11, 1+i%28, 9, 0, 0, 0, time.UTC), PreviousRemaining: 987654321, Paid: 100000, Remaining: int64(i%2) * 5000,
+		}
+	}
+	for _, r := range [][]DebtPaymentsMonthRow{rows, nil} {
+		url, err := GenerateDebtPaymentsMonth(DebtPaymentsMonthData{Month: 11, Year: 2026, Rows: r, GeneratedAt: time.Now()})
+		if err != nil {
+			t.Fatalf("GenerateDebtPaymentsMonth error: %v", err)
+		}
+		assertFileExists(t, url)
+	}
+}

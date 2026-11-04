@@ -1,8 +1,11 @@
 package usecase
 
 import (
+	"time"
+
 	"context"
 	"errors"
+	"gorm.io/gorm"
 	"testing"
 
 	"shop_project_be/internal/domain"
@@ -264,5 +267,19 @@ func TestIsTransient(t *testing.T) {
 				t.Errorf("IsTransient(%v) = %v; want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTrxStatus_CancelledWhenSoftDeleted(t *testing.T) {
+	live := &domain.Transactions{}
+	if got := trxStatus(live); got != "success" {
+		t.Errorf("live transaction should be success, got %q", got)
+	}
+	gone := &domain.Transactions{DeletedAt: gorm.DeletedAt{Time: time.Now(), Valid: true}}
+	if got := trxStatus(gone); got != "cancelled" {
+		t.Errorf("soft-deleted transaction should be cancelled, got %q", got)
+	}
+	if derefString(nil) != "" || derefString(ptr("salah input")) != "salah input" {
+		t.Error("derefString should read a nil pointer as empty and keep a set one")
 	}
 }

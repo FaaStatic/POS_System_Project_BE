@@ -45,6 +45,8 @@ type FilterTransactionRequest struct {
 	AfterTime     *string `query:"after_time,omitempty"`
 	AfterID       *string `query:"after_id,omitempty"`
 	OpenConflict  bool    `query:"open_conflict"`
+	// Status: success (default, as before), cancelled, or all.
+	Status string `query:"status" validate:"omitempty,oneof=success cancelled all"`
 }
 
 type DeleteTransactionRequest struct {

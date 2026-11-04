@@ -163,3 +163,87 @@ func (h *DebtHandler) Report(c fiber.Ctx) error {
 	}
 	return response.Success(c, fiber.StatusOK, "report generated", result)
 }
+
+// PaymentReceipt godoc
+//
+//	@Summary		Debt payment receipt
+//	@Description	Generates a PDF receipt for a single debt payment: the debt before, the amount paid, and the balance left.
+//	@Tags			Debts
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			id	path		string	true	"Debt payment ID"
+//	@Success		200	{object}	response.APIResponse
+//	@Failure		400	{object}	response.APIResponse
+//	@Failure		404	{object}	response.APIResponse
+//	@Router			/api/v1/sales/debts/payments/{id}/receipt [get]
+func (h *DebtHandler) PaymentReceipt(c fiber.Ctx) error {
+	req := requestdto.PrintDebtPaymentReceipt{ID: c.Params("id")}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.usecase.PrintDebtPaymentReceipt(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "receipt generated", result)
+}
+
+// PaymentsReport godoc
+//
+//	@Summary		Monthly debt payments recap
+//	@Description	Generates one PDF table of every debt payment in a month, all customers: customer, cashier, date, balance before, paid, balance left, and whether it is settled.
+//	@Tags			Debts
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			month	query		int	false	"Month 1-12 (default this month)"
+//	@Param			year	query		int	false	"Year (default this year)"
+//	@Success		200		{object}	response.APIResponse
+//	@Failure		400		{object}	response.APIResponse
+//	@Failure		500		{object}	response.APIResponse
+//	@Router			/api/v1/sales/debts/payments/report [get]
+func (h *DebtHandler) PaymentsReport(c fiber.Ctx) error {
+	var req requestdto.PrintDebtPaymentsMonth
+	if err := bindQuery(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.usecase.PrintDebtPaymentsMonth(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "report generated", result)
+}
+
+// ListPayments godoc
+//
+//	@Summary		List debt payments
+//	@Description	Fetches the debt payment history, newest first, optionally for one customer or a customer name search. client_ref is the idempotency key the register sent, which is its receipt number.
+//	@Tags			Debts
+//	@Produce		json
+//	@Security		BearerAuth
+//	@Param			customer_id	query		string	false	"Filter customer ID"
+//	@Param			search		query		string	false	"Customer name search"
+//	@Param			limit		query		int		false	"Number of items per page"
+//	@Param			order		query		string	false	"Sort: ASC or DESC (default DESC)"
+//	@Param			after_id	query		string	false	"Cursor: ID of the last row of the previous page"
+//	@Param			after_time	query		string	false	"Cursor: paid time of the last row (RFC3339Nano)"
+//	@Success		200			{object}	response.APIResponse
+//	@Failure		400			{object}	response.APIResponse
+//	@Failure		500			{object}	response.APIResponse
+//	@Router			/api/v1/sales/debts/payments [get]
+func (h *DebtHandler) ListPayments(c fiber.Ctx) error {
+	var req requestdto.FilterDebtPaymentRequest
+	if err := bindQuery(c, &req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "invalid query", err)
+	}
+	if err := validate.Struct(&req); err != nil {
+		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
+	}
+	result, err := h.usecase.GetAllDebtPaymentList(c.Context(), &req)
+	if err != nil {
+		return writeError(c, fiber.StatusInternalServerError, err)
+	}
+	return response.Success(c, fiber.StatusOK, "debt payments fetched", result)
+}

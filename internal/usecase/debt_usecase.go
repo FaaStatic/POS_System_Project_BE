@@ -9,6 +9,7 @@ import (
 	requestdto "shop_project_be/internal/dto/request_dto"
 	responsedto "shop_project_be/internal/dto/response_dto"
 	"shop_project_be/pkg/pdf"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,15 +19,21 @@ import (
 
 const dateLayout = "2006-01-02"
 
+// debtEntriesLimit: satu hutang terbuka menampung penjualan tanpa batas, jadi rincian
+// di detail hutang hanya memuat yang terbaru.
+const debtEntriesLimit = 30
+
 type debtUsecase struct {
-	debtRepo domain.DebtRepository
-	log      *zap.Logger
+	debtRepo  domain.DebtRepository
+	storeName string
+	log       *zap.Logger
 }
 
-func NewDebtUsecase(debtRepo domain.DebtRepository, log *zap.Logger) domain.DebtUseCase {
+func NewDebtUsecase(debtRepo domain.DebtRepository, storeName string, log *zap.Logger) domain.DebtUseCase {
 	return &debtUsecase{
-		debtRepo: debtRepo,
-		log:      log,
+		debtRepo:  debtRepo,
+		storeName: storeName,
+		log:       log,
 	}
 }
 
@@ -77,7 +84,7 @@ func (d *debtUsecase) AddingDebtCustomer(ctx context.Context, request *requestdt
 		Status:        enum.BELUM_LUNAS,
 		DueDate:       dueDate,
 	}
-	if err := d.debtRepo.AddDebt(ctx, debt, userId); err != nil {
+	if err := d.debtRepo.AddDebt(ctx, debt, userId, strings.TrimSpace(request.Note)); err != nil {
 		d.log.Error("failed to add debt", zap.Error(err))
 		if errors.Is(err, domain.ErrInternal) {
 			return fmt.Errorf("failed to add debt: %w", domain.ErrInternal)
@@ -146,6 +153,15 @@ func (d *debtUsecase) GetDebtCustomer(ctx context.Context, request *requestdto.G
 	}
 
 	response := toDebtResponse(debt)
+	entries, err := d.debtRepo.GetDebtEntries(ctx, id, debtEntriesLimit)
+	if err != nil {
+		return nil, passOrInternal(d.log, err, "failed to get debt entries", domain.ErrNotFound)
+	}
+	for _, e := range entries {
+		response.Entries = append(response.Entries, responsedto.DebtEntryDto{
+			Type: e.Type, Amount: e.Amount, Date: e.At.Format(time.RFC3339), Invoice: e.Invoice, Note: e.Note,
+		})
+	}
 	return &response, nil
 }
 
@@ -232,5 +248,169 @@ func (d *debtUsecase) PrintReportDebtCustomer(ctx context.Context, request *requ
 		CustomerName: debt.Customer.Name,
 		DebtId:       debt.ID.String(),
 		UrlPdf:       urlPdf,
+	}, nil
+}
+
+// truncate memotong teks dari klien (nomor struk) supaya tidak meluber di PDF.
+func truncate(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n])
+	}
+	return s
+}
+
+// paymentRemaining: sisa hutang sesudah cicilan, tidak pernah negatif.
+func paymentRemaining(p *domain.DebtPayments) int64 {
+	return max(0, p.PreviousRemainingDebt-p.NominalBayar)
+}
+
+func paymentParties(p *domain.DebtPayments) (customer, cashier string) {
+	if p.Debt != nil {
+		customer = p.Debt.Customer.Name
+	}
+	if p.User != nil {
+		cashier = p.User.Username
+	}
+	return customer, cashier
+}
+
+func (d *debtUsecase) PrintDebtPaymentReceipt(ctx context.Context, request *requestdto.PrintDebtPaymentReceipt) (*responsedto.PrintDebtPaymentResponse, error) {
+	id, err := uuid.Parse(request.ID)
+	if err != nil {
+		return nil, domain.InvalidID("invalid debt payment id format")
+	}
+	payment, err := d.debtRepo.GetDebtPaymentByID(ctx, id)
+	if err != nil {
+		return nil, passOrInternal(d.log, err, "failed to get debt payment", domain.ErrNotFound)
+	}
+	customer, cashier := paymentParties(payment)
+	number := ""
+	if payment.IdempotencyKey != nil {
+		number = *payment.IdempotencyKey
+	}
+	urlPdf, err := pdf.GenerateDebtPaymentReceipt(pdf.DebtPaymentReceiptData{
+		StoreName:         d.storeName,
+		Number:            truncate(number, 40),
+		Customer:          customer,
+		Cashier:           cashier,
+		PaidAt:            payment.TanggalBayar,
+		PreviousRemaining: payment.PreviousRemainingDebt,
+		Paid:              payment.NominalBayar,
+		Remaining:         paymentRemaining(payment),
+		GeneratedAt:       time.Now(),
+	})
+	if err != nil {
+		d.log.Error("failed to generate debt payment receipt pdf", zap.Error(err))
+		return nil, fmt.Errorf("failed to generate report pdf: %w", domain.ErrInternal)
+	}
+	return &responsedto.PrintDebtPaymentResponse{ID: payment.ID.String(), UrlPdf: urlPdf}, nil
+}
+
+func (d *debtUsecase) PrintDebtPaymentsMonth(ctx context.Context, request *requestdto.PrintDebtPaymentsMonth) (*responsedto.PrintDebtPaymentsMonthResponse, error) {
+	now := time.Now().In(domain.StoreLocation)
+	month, year := request.Month, request.Year
+	if month == 0 {
+		month = int(now.Month())
+	}
+	if year == 0 {
+		year = now.Year()
+	}
+	from := time.Date(year, time.Month(month), 1, 0, 0, 0, 0, domain.StoreLocation)
+	payments, err := d.debtRepo.GetDebtPaymentsInRange(ctx, from, from.AddDate(0, 1, 0))
+	if err != nil {
+		return nil, passOrInternal(d.log, err, "failed to get debt payments", domain.ErrInternal)
+	}
+	rows := make([]pdf.DebtPaymentsMonthRow, 0, len(payments))
+	for _, p := range payments {
+		customer, cashier := paymentParties(p)
+		rows = append(rows, pdf.DebtPaymentsMonthRow{
+			Customer:          customer,
+			Cashier:           cashier,
+			PaidAt:            p.TanggalBayar,
+			PreviousRemaining: p.PreviousRemainingDebt,
+			Paid:              p.NominalBayar,
+			Remaining:         paymentRemaining(p),
+		})
+	}
+	urlPdf, err := pdf.GenerateDebtPaymentsMonth(pdf.DebtPaymentsMonthData{
+		StoreName:   d.storeName,
+		Month:       month,
+		Year:        year,
+		Rows:        rows,
+		GeneratedAt: time.Now(),
+	})
+	if err != nil {
+		d.log.Error("failed to generate debt payments month pdf", zap.Error(err))
+		return nil, fmt.Errorf("failed to generate report pdf: %w", domain.ErrInternal)
+	}
+	return &responsedto.PrintDebtPaymentsMonthResponse{
+		Month:  fmt.Sprintf("%02d", month),
+		Year:   strconv.Itoa(year),
+		Count:  len(rows),
+		UrlPdf: urlPdf,
+	}, nil
+}
+
+func (d *debtUsecase) GetAllDebtPaymentList(ctx context.Context, request *requestdto.FilterDebtPaymentRequest) (*responsedto.DebtPaymentListResponseDto, error) {
+	filter := domain.FilterDebtPayment{
+		Limit:  request.Limit,
+		Order:  request.Order,
+		Search: strings.TrimSpace(request.Search),
+	}
+	if request.CustomerId != "" {
+		customerId, err := uuid.Parse(request.CustomerId)
+		if err != nil {
+			d.log.Error("failed to parse customer id", zap.Error(err))
+			return nil, domain.InvalidID("invalid customer id format")
+		}
+		filter.CustomerID = customerId
+	}
+	cursor, err := parseCursor(request.AfterID, request.AfterTime)
+	if err != nil {
+		return nil, err
+	}
+	filter.Cursor = cursor
+
+	result, err := d.debtRepo.GetAllDebtPayments(ctx, filter)
+	if err != nil {
+		d.log.Error("failed to get debt payments", zap.Error(err))
+		return nil, fmt.Errorf("failed to get debt payments: %w", domain.ErrInternal)
+	}
+
+	items := make([]responsedto.DebtPaymentItemDto, 0, len(result.Data))
+	for _, p := range result.Data {
+		remaining := paymentRemaining(p)
+		status := enum.BELUM_LUNAS
+		if remaining == 0 {
+			status = enum.LUNAS
+		}
+		item := responsedto.DebtPaymentItemDto{
+			ID:                    p.ID.String(),
+			DebtID:                p.DebtID.String(),
+			NominalBayar:          p.NominalBayar,
+			PreviousRemainingDebt: p.PreviousRemainingDebt,
+			RemainingDebt:         remaining,
+			Status:                status.String(),
+			PaidAt:                p.TanggalBayar.Format(time.RFC3339),
+		}
+		if p.IdempotencyKey != nil {
+			item.ClientRef = *p.IdempotencyKey
+		}
+		if p.User != nil {
+			item.Cashier = p.User.Username
+		}
+		if p.Debt != nil {
+			item.CustomerID = p.Debt.CustomerID.String()
+			item.CustomerName = p.Debt.Customer.Name
+		}
+		items = append(items, item)
+	}
+
+	nextId, nextTime := result.Cursor.Encode()
+	return &responsedto.DebtPaymentListResponseDto{
+		AfterId:     nextId,
+		AfterTime:   nextTime,
+		HasNext:     result.HasNext,
+		PaymentList: items,
 	}, nil
 }

@@ -313,6 +313,7 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 		Order:        dto.Order,
 		TypeTrx:      dto.TypePayment,
 		OpenConflict: dto.OpenConflict,
+		Status:       dto.Status,
 	}
 
 	result, err := t.trxRepo.GetAllTransaction(ctx, *filter)
@@ -337,6 +338,8 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 			Change:             toChangeResponse(trx.Change),
 			StockConflict:      trx.StockConflict,
 			ConflictReviewed:   trx.ConflictReviewedAt != nil,
+			Status:             trxStatus(trx),
+			CancelReason:       derefString(trx.CancelReason),
 			CreatedAt:          trx.CreatedAt.Format(time.RFC3339),
 			TransactionDetails: details,
 		})
@@ -351,6 +354,21 @@ func (t *transactionUsecase) GetAllTransaction(ctx context.Context, dto *request
 		HasNext:         result.HasNext,
 		TransactionList: responses,
 	}, nil
+}
+
+// trxStatus: a transaction is cancelled when it was soft-deleted.
+func trxStatus(trx *domain.Transactions) string {
+	if trx.DeletedAt.Valid {
+		return "cancelled"
+	}
+	return "success"
+}
+
+func derefString(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 func toProductTrxResponse(d domain.TransactionsDetail) *responsedto.ProductTransactionResponse {
@@ -393,6 +411,8 @@ func (t *transactionUsecase) GetTransaction(ctx context.Context, dto *requestdto
 		Change:             toChangeResponse(result.Change),
 		StockConflict:      result.StockConflict,
 		ConflictReviewed:   result.ConflictReviewedAt != nil,
+		Status:             trxStatus(result),
+		CancelReason:       derefString(result.CancelReason),
 		CreatedAt:          result.CreatedAt.Format(time.RFC3339),
 		TransactionDetails: transactionDetail,
 	}
@@ -556,6 +576,9 @@ func (t *transactionUsecase) PrintReportTransaction(ctx context.Context, dto *re
 	trx, err := t.trxRepo.GetTransactionByID(ctx, trxId)
 	if err != nil {
 		return nil, passOrInternal(t.log, err, "failed to get transaction", domain.ErrNotFound)
+	}
+	if trx.DeletedAt.Valid {
+		return nil, domain.Conflict("transaction was cancelled; no receipt is printed for it")
 	}
 
 	items := make([]pdf.TransactionReportItem, 0, len(trx.TransactionDetail))

@@ -104,6 +104,8 @@ type FilterTransaction struct {
 	Order      string
 	// OpenConflict: hanya transaksi offline dengan stok minus yang belum ditinjau.
 	OpenConflict bool
+	// Status: "" or "success" (not cancelled), "cancelled", or "all".
+	Status string
 }
 
 type ResultTransaction struct {

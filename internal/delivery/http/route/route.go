@@ -113,6 +113,9 @@ func New(h Handlers, jwtMw *middleware.JWTMiddleware, storage fiber.Storage, log
 		debts.Post("", onlySuper, h.Debt.Add)
 		debts.Post("/pay", h.Debt.Pay)
 		debts.Get("", h.Debt.List)
+		debts.Get("/payments", h.Debt.ListPayments)
+		debts.Get("/payments/report", onlySuper, h.Debt.PaymentsReport)
+		debts.Get("/payments/:id/receipt", h.Debt.PaymentReceipt)
 		debts.Get("/report", onlySuper, h.Debt.Report)
 		debts.Get("/:id", h.Debt.Get)
 

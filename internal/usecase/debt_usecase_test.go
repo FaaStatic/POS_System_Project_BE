@@ -18,9 +18,10 @@ import (
 type fakeDebtRepo struct {
 	domain.DebtRepository
 
-	addErr  error
-	added   *domain.Debts
-	addedBy uuid.UUID
+	addErr    error
+	added     *domain.Debts
+	addedBy   uuid.UUID
+	addedNote string
 
 	getByIDResult *domain.Debts
 	getByIDErr    error
@@ -28,13 +29,28 @@ type fakeDebtRepo struct {
 	getAllResult *domain.DebtsPaginated
 	getAllErr    error
 
+	entries    []domain.DebtEntry
+	entriesErr error
+
+	paymentsResult *domain.DebtPaymentsPaginated
+	paymentsErr    error
+	paymentsFilter domain.FilterDebtPayment
+
+	paymentByID    *domain.DebtPayments
+	paymentByIDErr error
+	rangePayments  []*domain.DebtPayments
+	rangeErr       error
+	rangeFrom      time.Time
+	rangeUntil     time.Time
+
 	payErr     error
 	payResult  *domain.DebtPaymentResult
 	payDebtID  uuid.UUID
 	payPayment *domain.DebtPayments
 }
 
-func (f *fakeDebtRepo) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID) error {
+func (f *fakeDebtRepo) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID, note string) error {
+	f.addedNote = note
 	f.added = debt
 	f.addedBy = userID
 	return f.addErr
@@ -50,6 +66,24 @@ func (f *fakeDebtRepo) GetDebtWithPayments(ctx context.Context, id uuid.UUID) (*
 
 func (f *fakeDebtRepo) GetAllDebt(ctx context.Context, filter domain.FilterDebt) (*domain.DebtsPaginated, error) {
 	return f.getAllResult, f.getAllErr
+}
+
+func (f *fakeDebtRepo) GetDebtEntries(ctx context.Context, debtID uuid.UUID, limit int) ([]domain.DebtEntry, error) {
+	return f.entries, f.entriesErr
+}
+
+func (f *fakeDebtRepo) GetAllDebtPayments(ctx context.Context, filter domain.FilterDebtPayment) (*domain.DebtPaymentsPaginated, error) {
+	f.paymentsFilter = filter
+	return f.paymentsResult, f.paymentsErr
+}
+
+func (f *fakeDebtRepo) GetDebtPaymentByID(ctx context.Context, id uuid.UUID) (*domain.DebtPayments, error) {
+	return f.paymentByID, f.paymentByIDErr
+}
+
+func (f *fakeDebtRepo) GetDebtPaymentsInRange(ctx context.Context, from, until time.Time) ([]*domain.DebtPayments, error) {
+	f.rangeFrom, f.rangeUntil = from, until
+	return f.rangePayments, f.rangeErr
 }
 
 func (f *fakeDebtRepo) PayDebt(ctx context.Context, debtID uuid.UUID, payment *domain.DebtPayments) (*domain.DebtPaymentResult, error) {
@@ -328,3 +362,138 @@ func TestPayDebtCash_InternalErrorIsHidden(t *testing.T) {
 }
 
 var errOverpaymentFixture = errors.New("payment amount (999999.00) exceeds remaining debt (5000.00)")
+
+func TestGetDebtCustomer_ListsSaleAndManualEntries(t *testing.T) {
+	at := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	repo := &fakeDebtRepo{
+		getByIDResult: &domain.Debts{TotalDebt: 50000, RemainingDebt: 50000, Customer: domain.Customers{Name: "Budi"}},
+		entries: []domain.DebtEntry{
+			{Type: "sale", Amount: 30000, At: at, Invoice: "INV-001"},
+			{Type: "manual", Amount: 20000, At: at.Add(-time.Hour)},
+		},
+	}
+	u := newTestDebtUsecase(repo)
+
+	resp, err := u.GetDebtCustomer(context.Background(), &requestdto.GetDebtRequest{DebtId: uuid.New().String()})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(resp.Entries) != 2 || resp.Entries[0].Type != "sale" || resp.Entries[0].Invoice != "INV-001" || resp.Entries[1].Type != "manual" {
+		t.Fatalf("unexpected entries: %+v", resp.Entries)
+	}
+	if resp.Entries[0].Date != at.Format(time.RFC3339) {
+		t.Errorf("unexpected entry date %q", resp.Entries[0].Date)
+	}
+}
+
+func TestGetAllDebtPaymentList_MapsReceiptFields(t *testing.T) {
+	key := "HTG-A1-0007"
+	debtID, customerID := uuid.New(), uuid.New()
+	paid := time.Date(2026, 11, 4, 9, 30, 0, 0, time.UTC)
+	repo := &fakeDebtRepo{paymentsResult: &domain.DebtPaymentsPaginated{
+		HasNext: false,
+		Data: []*domain.DebtPayments{
+			{ // cicilan sebagian: sisa 5000
+				ID: uuid.New(), DebtID: debtID, NominalBayar: 15000, PreviousRemainingDebt: 20000, TanggalBayar: paid,
+				IdempotencyKey: &key, User: &domain.Users{Username: "kasir1"},
+				Debt: &domain.Debts{CustomerID: customerID, Customer: domain.Customers{Name: "Budi"}},
+			},
+			{ // pelunasan dari CMS tanpa kunci
+				ID: uuid.New(), DebtID: debtID, NominalBayar: 5000, PreviousRemainingDebt: 5000, TanggalBayar: paid.Add(time.Hour),
+				Debt: &domain.Debts{CustomerID: customerID, Customer: domain.Customers{Name: "Budi"}},
+			},
+		},
+	}}
+	u := newTestDebtUsecase(repo)
+
+	resp, err := u.GetAllDebtPaymentList(context.Background(), &requestdto.FilterDebtPaymentRequest{Search: "  bud ", CustomerId: customerID.String()})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if repo.paymentsFilter.Search != "bud" || repo.paymentsFilter.CustomerID != customerID {
+		t.Errorf("filter not passed through: %+v", repo.paymentsFilter)
+	}
+	first, second := resp.PaymentList[0], resp.PaymentList[1]
+	if first.RemainingDebt != 5000 || first.Status != enum.BELUM_LUNAS.String() || first.ClientRef != key || first.Cashier != "kasir1" || first.CustomerName != "Budi" {
+		t.Errorf("unexpected partial payment: %+v", first)
+	}
+	if second.RemainingDebt != 0 || second.Status != enum.LUNAS.String() || second.ClientRef != "" {
+		t.Errorf("unexpected full payment: %+v", second)
+	}
+}
+
+func TestGetAllDebtPaymentList_RejectsBadCustomerID(t *testing.T) {
+	u := newTestDebtUsecase(&fakeDebtRepo{})
+	if _, err := u.GetAllDebtPaymentList(context.Background(), &requestdto.FilterDebtPaymentRequest{CustomerId: "x"}); err == nil {
+		t.Fatal("expected an invalid id error")
+	}
+}
+
+func TestAddingDebtCustomer_PassesTrimmedNote(t *testing.T) {
+	repo := &fakeDebtRepo{}
+	u := newTestDebtUsecase(repo)
+
+	err := u.AddingDebtCustomer(context.Background(), &requestdto.AddDebtRequest{
+		CustomerID: uuid.New().String(), UserID: uuid.New().String(), TotalTransaksi: 200000, Note: "  Pinjam tunai  ",
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if repo.addedNote != "Pinjam tunai" {
+		t.Errorf("expected the trimmed note, got %q", repo.addedNote)
+	}
+}
+
+func TestGetDebtCustomer_ManualEntryCarriesNote(t *testing.T) {
+	repo := &fakeDebtRepo{
+		getByIDResult: &domain.Debts{Customer: domain.Customers{Name: "Budi"}},
+		entries:       []domain.DebtEntry{{Type: "manual", Amount: 200000, At: time.Now(), Note: "Pinjam tunai"}},
+	}
+	resp, err := newTestDebtUsecase(repo).GetDebtCustomer(context.Background(), &requestdto.GetDebtRequest{DebtId: uuid.New().String()})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(resp.Entries) != 1 || resp.Entries[0].Note != "Pinjam tunai" {
+		t.Fatalf("unexpected entries: %+v", resp.Entries)
+	}
+}
+
+func TestPrintDebtPaymentReceipt(t *testing.T) {
+	key := "HTG-A1-0007"
+	repo := &fakeDebtRepo{paymentByID: &domain.DebtPayments{
+		ID: uuid.New(), NominalBayar: 15000, PreviousRemainingDebt: 20000, TanggalBayar: time.Now(), IdempotencyKey: &key,
+		User: &domain.Users{Username: "kasir1"}, Debt: &domain.Debts{Customer: domain.Customers{Name: "Budi"}},
+	}}
+	u := newTestDebtUsecase(repo)
+
+	resp, err := u.PrintDebtPaymentReceipt(context.Background(), &requestdto.PrintDebtPaymentReceipt{ID: repo.paymentByID.ID.String()})
+	if err != nil || resp.UrlPdf == "" || resp.ID != repo.paymentByID.ID.String() {
+		t.Fatalf("expected a receipt url, got %+v err=%v", resp, err)
+	}
+	if _, err := u.PrintDebtPaymentReceipt(context.Background(), &requestdto.PrintDebtPaymentReceipt{ID: "nope"}); err == nil {
+		t.Error("a malformed id must be rejected")
+	}
+	repo.paymentByID, repo.paymentByIDErr = nil, domain.NotFound("gone")
+	if _, err := u.PrintDebtPaymentReceipt(context.Background(), &requestdto.PrintDebtPaymentReceipt{ID: uuid.NewString()}); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("a missing payment must be not found, got %v", err)
+	}
+}
+
+func TestPrintDebtPaymentsMonth_ReadsTheStoreMonth(t *testing.T) {
+	repo := &fakeDebtRepo{rangePayments: []*domain.DebtPayments{
+		{ID: uuid.New(), NominalBayar: 5000, PreviousRemainingDebt: 5000, TanggalBayar: time.Now(), Debt: &domain.Debts{Customer: domain.Customers{Name: "Budi"}}},
+	}}
+	u := newTestDebtUsecase(repo)
+
+	resp, err := u.PrintDebtPaymentsMonth(context.Background(), &requestdto.PrintDebtPaymentsMonth{Month: 2, Year: 2026})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	wantFrom := time.Date(2026, 2, 1, 0, 0, 0, 0, domain.StoreLocation)
+	if !repo.rangeFrom.Equal(wantFrom) || !repo.rangeUntil.Equal(wantFrom.AddDate(0, 1, 0)) {
+		t.Errorf("wrong range %v - %v", repo.rangeFrom, repo.rangeUntil)
+	}
+	if resp.Month != "02" || resp.Year != "2026" || resp.Count != 1 || resp.UrlPdf == "" {
+		t.Errorf("unexpected response: %+v", resp)
+	}
+}

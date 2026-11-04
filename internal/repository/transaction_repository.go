@@ -236,6 +236,14 @@ func (t *transactionRepository) GetAllTransaction(ctx context.Context, filter do
 		query = query.Where("stock_conflict AND conflict_reviewed_at IS NULL")
 	}
 
+	// Cancelled transactions are soft-deleted, so reading them means leaving the default scope.
+	switch filter.Status {
+	case "cancelled":
+		query = query.Unscoped().Where("transactions.deleted_at IS NOT NULL")
+	case "all":
+		query = query.Unscoped()
+	}
+
 	var items []*domain.Transactions
 	if err := keysetPage(query, "", limit, order, filter.Cursor).Find(&items).Error; err != nil {
 		return nil, fmt.Errorf("failed to get transaction: %w", err)
@@ -380,7 +388,8 @@ func (t *transactionRepository) GetDailyProductSold(ctx context.Context, month i
 func (t *transactionRepository) GetTransactionByID(ctx context.Context, id uuid.UUID) (*domain.Transactions, error) {
 	var item domain.Transactions
 	// Kasir/customer yang sudah dinonaktifkan tetap tampil di detail dan struk lama.
-	result := t.db.WithContext(ctx).Preload("User", unscoped).
+	// Cancelled (soft-deleted) transactions stay readable: the CMS lists them with their reason.
+	result := t.db.WithContext(ctx).Unscoped().Preload("User", unscoped).
 		Preload("Customer", unscoped).
 		Preload("TransactionDetail").Preload("Change").Where("id = ?", id).First(&item)
 	if result.Error != nil {

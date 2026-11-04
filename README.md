@@ -18,7 +18,7 @@ Provide a lightweight but secure cashier API for small shops: stock tracking, at
 - **Categories as a table**: names are unique case-insensitively and ignoring edge whitespace (`key = lower(trim(name))`); a category still used by products cannot be deleted
 - **Offline transactions (cashier)**: `POST /api/v1/sales/transactions/sync` accepts up to 100 cash/debt transactions created without internet. Each item carries a `client_ref` (UUID) so a resent queue is never recorded twice, uses the price the buyer actually paid, and succeeds or fails independently (`retryable` tells the client whether to resend). If server stock is short, the transaction is still accepted, stock stops at 0, and the transaction is flagged `stock_conflict` for admin review
 - **Transaction cancellation** requires a reason; staff may only cancel their own transactions on the same day
-- **Debts**: one open debt per customer (guarded by a partial unique index), installment payments with an `idempotency_key` so a retried request is not recorded twice, manual debts recorded in `debt_adjustments` for reports
+- **Debts**: one open debt per customer (guarded by a partial unique index), installment payments with an `idempotency_key` so a retried request is not recorded twice, manual debts recorded in `debt_adjustments` (with an optional `note`) for reports
 - **Staff and customer management**: deactivate (soft delete), restore, and permanently delete. Accounts still referenced by sales/debt history are anonymized instead of deleted, so old reports stay intact. Deactivating staff immediately revokes all their sessions and push tokens
 - **Dashboard**: revenue, gross profit, debt (balance, new, paid), daily chart, top 5 products, payment method breakdown, devices currently logged in, and the number of stock conflicts for a date range (max 366 days)
 - **Online payments (Midtrans)**: **QRIS** and **Virtual Account** charges (BCA `bank_transfer`, Mandiri `echannel`); item prices are computed server-side and the admin fee is added automatically (QRIS 0.7%, VA flat). Status is updated through a webhook verified by `signature_key` (SHA-512, constant-time comparison). Digital products are **POS-only** and rejected for online charges
@@ -262,18 +262,21 @@ Every path below is shown with `v1`; the real prefix is `/api/{server.api_versio
 | Products | `POST /api/v1/catalog/products`, `POST /api/v1/catalog/products/bulk`, `PATCH /api/v1/catalog/products/stock`, `DELETE /api/v1/catalog/products/:id` | superadmin |
 | Categories | `GET /api/v1/catalog/categories` (with `product_count`) | JWT |
 | Categories | `POST /api/v1/catalog/categories`, `PATCH /api/v1/catalog/categories/:id`, `DELETE /api/v1/catalog/categories/:id` | superadmin |
-| Transactions | `POST /api/v1/sales/transactions`, `POST /api/v1/sales/transactions/sync`, `GET /api/v1/sales/transactions` (`open_conflict=true` for stock conflicts), `GET /api/v1/sales/transactions/:id`, `GET /api/v1/sales/transactions/report/transaction` | JWT |
+| Transactions | `POST /api/v1/sales/transactions`, `POST /api/v1/sales/transactions/sync`, `GET /api/v1/sales/transactions` (`open_conflict=true` for stock conflicts; `status=success|cancelled|all`, default `success`), `GET /api/v1/sales/transactions/:id`, `GET /api/v1/sales/transactions/report/transaction` | JWT |
 | Transactions | `DELETE /api/v1/sales/transactions/:id` (body `{"reason"}`; staff: own transactions today) | JWT |
 | Transactions | `GET /api/v1/sales/transactions/report/month`, `PATCH /api/v1/sales/transactions/:id/conflict-review` | superadmin |
 | Customers | `POST /api/v1/sales/customers`, `GET /api/v1/sales/customers`, `GET /api/v1/sales/customers/:id`, `GET /api/v1/sales/customers/:id/transactions` | JWT |
 | Customers | `GET /api/v1/sales/customers?status=inactive`, `PUT /api/v1/sales/customers/:id`, `DELETE /api/v1/sales/customers/:id` (deactivate), `POST /api/v1/sales/customers/:id/restore`, `DELETE /api/v1/sales/customers/:id/permanent` | superadmin |
-| Debts | `POST /api/v1/sales/debts/pay`, `GET /api/v1/sales/debts`, `GET /api/v1/sales/debts/:id` | JWT |
+| Debts | `POST /api/v1/sales/debts/pay`, `GET /api/v1/sales/debts`, `GET /api/v1/sales/debts/payments`, `GET /api/v1/sales/debts/payments/:id/receipt`, `GET /api/v1/sales/debts/:id` | JWT |
+| Debts | `GET /api/v1/sales/debts/payments/report?month=&year=` | superadmin |
 | Debts | `POST /api/v1/sales/debts` (manual debt), `GET /api/v1/sales/debts/report` | superadmin |
 | FCM | `POST /api/v1/account/fcm/register`, `POST /api/v1/account/fcm/logout` | JWT |
 | FCM | `GET /api/v1/account/fcm/devices`, `DELETE /api/v1/account/fcm/devices/:id` | superadmin |
 
 Behavior notes:
 
+- Every transaction response carries `status` (`success` or `cancelled`) and, when cancelled, `cancel_reason`. A cancelled transaction is soft-deleted; it only shows in the list with `status=cancelled|all` and stays readable by id. `GET .../debts/payments/:id/receipt` returns a PDF receipt (`url_pdf`) for one installment; `GET .../debts/payments/report` returns one PDF table of a month's installments for all customers (customer, cashier, date, balance before, paid, balance left, settled or not).
+- `GET /api/v1/sales/debts/payments` lists installment payments newest first (cursor on paid time; `customer_id` and customer-name `search` filters). `client_ref` is the `idempotency_key` the register sent, which is its receipt number. `GET /api/v1/sales/debts/:id` returns `entries`: the latest 30 debt sales (`sale`, with `invoice`) and manual debts (`manual`, with its `note`) that make up the balance.
 - `GET /api/v1/sales/debts` does not include the transaction list (`transaction_list` is always `[]`) because a single open debt can hold an unbounded number of transactions. Fetch them through `GET /api/v1/sales/customers/:id/transactions` using the `customer_id` from the debt response; filter with `type_payment=1` for debt transactions only. `GET /api/v1/sales/debts/:id` still includes its transactions.
 - `PUT /api/v1/sales/customers/:id` is a partial update: fields not sent are left unchanged, an empty string clears `phone_number`/`address`, the name must not be empty, and a body with no fields → 400.
 - Permanent deletion only applies to data that has already been deactivated. The response `mode` is `deleted` (row removed) or `anonymized` (row kept because history references it). A customer with an unpaid debt can be neither deactivated nor deleted.
