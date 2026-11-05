@@ -231,10 +231,8 @@ func (u *userUsecase) ListStaff(ctx context.Context, request *requestdto.ListSta
 	return &responsedto.ListStaffResponse{AfterId: nextID, AfterTime: nextTime, HasNext: result.HasNext, Staff: staff}, nil
 }
 
-// staffTarget memuat akun yang akan dikelola dari CMS. Akun superadmin dikelola
-// lewat perintah create-admin, bukan dari CMS, supaya admin tidak bisa mengunci
-// dirinya sendiri keluar.
-func (u *userUsecase) staffTarget(ctx context.Context, rawID string) (*domain.Users, error) {
+// loadUser memuat akun berdasarkan id teks, aktif maupun nonaktif.
+func (u *userUsecase) loadUser(ctx context.Context, rawID string) (*domain.Users, error) {
 	id, err := uuid.Parse(rawID)
 	if err != nil {
 		return nil, domain.InvalidID("invalid user id format")
@@ -243,10 +241,39 @@ func (u *userUsecase) staffTarget(ctx context.Context, rawID string) (*domain.Us
 	if err != nil {
 		return nil, passOrInternal(u.log, err, "failed to get user", domain.ErrNotFound)
 	}
+	return user, nil
+}
+
+// staffTarget memuat akun yang akan dikelola dari CMS. Akun superadmin tidak
+// bisa dinonaktifkan, dipulihkan, atau dihapus dari CMS; itu hanya lewat CLI.
+func (u *userUsecase) staffTarget(ctx context.Context, rawID string) (*domain.Users, error) {
+	user, err := u.loadUser(ctx, rawID)
+	if err != nil {
+		return nil, err
+	}
 	if user.Role != enum.Staff {
 		return nil, domain.Forbidden("superadmin accounts cannot be managed from the CMS")
 	}
 	return user, nil
+}
+
+// checkAdminReset memuat superadmin yang password-nya akan direset dari
+// CMS. Hanya superadmin lain yang aktif yang boleh, dan hanya password.
+func (u *userUsecase) checkAdminReset(ctx context.Context, request *requestdto.UpdateStaffRequest, target *domain.Users) error {
+	if request.Username != nil || request.Password == nil {
+		return domain.Forbidden("superadmin accounts only allow a password reset from the CMS")
+	}
+	if request.ActorID == "" || request.ActorID == target.ID.String() {
+		return domain.Forbidden("superadmin cannot reset their own password from the CMS")
+	}
+	actor, err := u.loadUser(ctx, request.ActorID)
+	if err != nil {
+		return err
+	}
+	if actor.Role != enum.Superadmin || actor.DeletedAt.Valid {
+		return domain.Forbidden("only an active superadmin can reset another superadmin password")
+	}
+	return nil
 }
 
 // revokeAccess mencabut semua sesi dan token push milik user. Dipanggil setelah
@@ -264,9 +291,14 @@ func (u *userUsecase) revokeAccess(ctx context.Context, userID uuid.UUID) error 
 }
 
 func (u *userUsecase) UpdateStaff(ctx context.Context, request *requestdto.UpdateStaffRequest) error {
-	user, err := u.staffTarget(ctx, request.ID)
+	user, err := u.loadUser(ctx, request.ID)
 	if err != nil {
 		return err
+	}
+	if user.Role != enum.Staff {
+		if err := u.checkAdminReset(ctx, request, user); err != nil {
+			return err
+		}
 	}
 
 	fields := map[string]any{}

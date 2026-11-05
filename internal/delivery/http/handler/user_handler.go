@@ -235,7 +235,7 @@ func (h *UserHandler) ListStaff(c fiber.Ctx) error {
 // UpdateStaff godoc
 //
 //	@Summary		Update staff
-//	@Description	Changes a staff username and/or password. A new password signs the staff out of every device. Superadmin only.
+//	@Description	Changes a staff username and/or password. A new password signs the account out of every device. A superadmin target accepts a password only, from another active superadmin (403 otherwise). Superadmin only.
 //	@Tags			Staff
 //	@Accept			json
 //	@Produce		json
@@ -252,6 +252,7 @@ func (h *UserHandler) UpdateStaff(c fiber.Ctx) error {
 		return response.Error(c, fiber.StatusBadRequest, "invalid request body", err)
 	}
 	req.ID = c.Params("id")
+	req.ActorID, _ = c.Locals("user_id").(string)
 	if err := validate.Struct(&req); err != nil {
 		return response.Error(c, fiber.StatusBadRequest, "validation failed", err)
 	}
