@@ -18,10 +18,20 @@ type fakeStaffUserRepo struct {
 	user        *domain.Users
 	deactivated bool
 	purgeFields map[string]any
+	byID        map[uuid.UUID]*domain.Users
+	updated     map[string]any
 }
 
 func (f *fakeStaffUserRepo) GetUserAnyState(ctx context.Context, id uuid.UUID) (*domain.Users, error) {
+	if u, ok := f.byID[id]; ok {
+		return u, nil
+	}
 	return f.user, nil
+}
+
+func (f *fakeStaffUserRepo) UpdateUser(ctx context.Context, id uuid.UUID, fields map[string]any) error {
+	f.updated = fields
+	return nil
 }
 
 func (f *fakeStaffUserRepo) DeactivateUser(ctx context.Context, id uuid.UUID) error {
@@ -100,5 +110,52 @@ func TestPurgeStaff_RequiresMatchingConfirmation(t *testing.T) {
 	}
 	if users.purgeFields["username"] == "kasir1" || users.purgeFields["password"] == "" {
 		t.Errorf("anon fields keep identity or leave password empty: %v", users.purgeFields)
+	}
+}
+
+func TestUpdateStaff_SuperadminPasswordReset(t *testing.T) {
+	newPass := "secret123"
+	newName := "renamed"
+	target := &domain.Users{ID: uuid.New(), Username: "owner-b", Role: enum.Superadmin}
+	activeAdmin := &domain.Users{ID: uuid.New(), Username: "owner-a", Role: enum.Superadmin}
+	inactiveAdmin := &domain.Users{ID: uuid.New(), Username: "owner-c", Role: enum.Superadmin}
+	inactiveAdmin.DeletedAt.Valid = true
+	staffActor := &domain.Users{ID: uuid.New(), Username: "kasir", Role: enum.Staff}
+
+	tests := []struct {
+		name      string
+		actor     string
+		username  *string
+		password  *string
+		wantErr   error
+		wantWrite bool
+	}{
+		{"other active admin resets password", activeAdmin.ID.String(), nil, &newPass, nil, true},
+		{"self reset refused", target.ID.String(), nil, &newPass, domain.ErrForbidden, false},
+		{"no actor refused", "", nil, &newPass, domain.ErrForbidden, false},
+		{"inactive admin refused", inactiveAdmin.ID.String(), nil, &newPass, domain.ErrForbidden, false},
+		{"staff actor refused", staffActor.ID.String(), nil, &newPass, domain.ErrForbidden, false},
+		{"username change refused", activeAdmin.ID.String(), &newName, &newPass, domain.ErrForbidden, false},
+		{"empty change refused", activeAdmin.ID.String(), nil, nil, domain.ErrForbidden, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			u, users, sessions, _ := newStaffUsecase(target)
+			users.byID = map[uuid.UUID]*domain.Users{
+				target.ID: target, activeAdmin.ID: activeAdmin, inactiveAdmin.ID: inactiveAdmin, staffActor.ID: staffActor,
+			}
+			err := u.UpdateStaff(context.Background(), &requestdto.UpdateStaffRequest{
+				ID: target.ID.String(), ActorID: tc.actor, Username: tc.username, Password: tc.password,
+			})
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v; want %v", err, tc.wantErr)
+			}
+			if wrote := users.updated != nil; wrote != tc.wantWrite {
+				t.Errorf("password written = %v; want %v", wrote, tc.wantWrite)
+			}
+			if tc.wantWrite && len(sessions.revoked) != 1 {
+				t.Errorf("sessions revoked = %v; want target signed out", sessions.revoked)
+			}
+		})
 	}
 }

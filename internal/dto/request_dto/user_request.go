@@ -33,6 +33,7 @@ type ListStaffRequest struct {
 // UpdateStaffRequest: field nil = tidak diubah.
 type UpdateStaffRequest struct {
 	ID       string  `json:"-" validate:"required,uuid"`
+	ActorID  string  `json:"-"`
 	Username *string `json:"username,omitempty" validate:"omitempty,min=3,max=100"`
 	Password *string `json:"password,omitempty" validate:"omitempty,min=6"`
 }

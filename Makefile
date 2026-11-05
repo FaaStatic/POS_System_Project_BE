@@ -32,6 +32,14 @@ migrate-reset-dev:
 	APP_ENV=development go run main.go migrate-reset
 	@echo "Migration Development Done"
 
+reset-admin-password:
+	@test -n "$(U)" || { echo "usage: make reset-admin-password U=<superadmin username>"; exit 1; }
+	APP_ENV=production go run main.go reset-admin-password -u "$(U)"
+
+reset-admin-password-dev:
+	@test -n "$(U)" || { echo "usage: make reset-admin-password-dev U=<superadmin username>"; exit 1; }
+	APP_ENV=development go run main.go reset-admin-password -u "$(U)"
+
 swagger:
 	$(shell go env GOPATH)/bin/swag init -g main.go --parseInternal --parseDependency --ot json -o .
 
@@ -102,3 +110,7 @@ docker-create-admin: docker-env
 	@printf "username: "; read u; printf "password: "; stty -echo; read p; stty echo; echo; \
 	$(COMPOSE) run --rm migrate && \
 	$(COMPOSE) run --rm migrate create-admin -u "$$u" -p "$$p"
+
+docker-reset-admin-password: docker-env
+	@test -n "$(U)" || { echo "usage: make docker-reset-admin-password U=<superadmin username>"; exit 1; }
+	$(COMPOSE) run --rm migrate reset-admin-password -u "$(U)"
