@@ -74,6 +74,7 @@ func (t *transactionUsecase) syncOne(ctx context.Context, userID string, item re
 	res.TransactionID = &created.TransactionID
 	res.NoInvoice = created.NoInvoice
 	res.StockConflict = created.StockConflict
+	res.DebtInfo = created.DebtInfo
 	return res
 }
 

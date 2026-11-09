@@ -36,6 +36,9 @@ type SyncTransactionResult struct {
 	StockConflict bool       `json:"stock_conflict"`
 	Retryable     bool       `json:"retryable"`
 	Error         string     `json:"error,omitempty"`
+	// DebtInfo hanya ada untuk penjualan hutang yang baru dibuat: saldo pelanggan
+	// sebelum dan sesudah, supaya struk kasir bisa mengganti angka perkiraan offline.
+	DebtInfo *DebtTransactionInfo `json:"debt_info,omitempty"`
 }
 
 type DebtTransactionInfo struct {

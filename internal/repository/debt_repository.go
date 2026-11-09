@@ -59,38 +59,50 @@ func (d *debtRepository) getDebt(ctx context.Context, id uuid.UUID, scopes ...fu
 	return &debt, nil
 }
 
+// addToOpenDebt adds amount to the customer's open debt, or opens a new one when every earlier
+// debt is paid off; a customer has at most one open debt. The caller already holds
+// lockCustomerShared. A zero dueDate keeps the current due date.
+func addToOpenDebt(tx *gorm.DB, customerID uuid.UUID, amount int64, dueDate time.Time) (debt domain.Debts, err error) {
+	err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("customer_id = ? AND status = ?", customerID, enum.BELUM_LUNAS).
+		First(&debt).Error
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		debt = domain.Debts{CustomerID: customerID, TotalDebt: amount, RemainingDebt: amount, Status: enum.BELUM_LUNAS, DueDate: dueDate}
+		if err := tx.Create(&debt).Error; err != nil {
+			return debt, internalErr(fmt.Errorf("failed to create debt: %w", err))
+		}
+		return debt, nil
+	case err != nil:
+		return debt, internalErr(fmt.Errorf("failed to get debt: %w", err))
+	}
+	fields := map[string]interface{}{
+		"total_debt":     debt.TotalDebt + amount,
+		"remaining_debt": debt.RemainingDebt + amount,
+		"status":         enum.BELUM_LUNAS,
+	}
+	if !dueDate.IsZero() {
+		fields["due_date"] = dueDate
+	}
+	if err := tx.Model(&domain.Debts{}).Where("id = ?", debt.ID).Updates(fields).Error; err != nil {
+		return debt, internalErr(fmt.Errorf("failed to update debt: %w", err))
+	}
+	debt.TotalDebt += amount
+	debt.RemainingDebt += amount
+	debt.Status = enum.BELUM_LUNAS
+	return debt, nil
+}
+
 func (d *debtRepository) AddDebt(ctx context.Context, debt *domain.Debts, userID uuid.UUID, note string) error {
 	return runTxDB(ctx, d.db, func(tx *gorm.DB) error {
 		if err := lockCustomerShared(tx, debt.CustomerID); err != nil {
 			return err
 		}
-		var open domain.Debts
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("customer_id = ? AND status = ?", debt.CustomerID, enum.BELUM_LUNAS).
-			First(&open).Error
-		debtID := open.ID
-		switch {
-		case errors.Is(err, gorm.ErrRecordNotFound):
-			if err := tx.Create(debt).Error; err != nil {
-				return internalErr(fmt.Errorf("failed to add debt: %w", err))
-			}
-			debtID = debt.ID
-		case err != nil:
-			return internalErr(fmt.Errorf("failed to get debt: %w", err))
-		default:
-			fields := map[string]interface{}{
-				"total_debt":     open.TotalDebt + debt.TotalDebt,
-				"remaining_debt": open.RemainingDebt + debt.RemainingDebt,
-				"status":         enum.BELUM_LUNAS,
-			}
-			if !debt.DueDate.IsZero() {
-				fields["due_date"] = debt.DueDate
-			}
-			if err := tx.Model(&domain.Debts{}).Where("id = ?", open.ID).Updates(fields).Error; err != nil {
-				return internalErr(fmt.Errorf("failed to update debt: %w", err))
-			}
+		open, err := addToOpenDebt(tx, debt.CustomerID, debt.TotalDebt, debt.DueDate)
+		if err != nil {
+			return err
 		}
-		adjustment := &domain.DebtAdjustments{DebtID: debtID, UserID: userID, Amount: debt.TotalDebt}
+		adjustment := &domain.DebtAdjustments{DebtID: open.ID, UserID: userID, Amount: debt.TotalDebt}
 		if note != "" {
 			adjustment.Note = &note
 		}
