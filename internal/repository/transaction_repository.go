@@ -65,45 +65,14 @@ func (t *transactionRepository) CreateTransaction(ctx context.Context, transacti
 			if err := lockCustomerShared(tx, *transaction.CustomerID); err != nil {
 				return err
 			}
-			var debt domain.Debts
-			err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("customer_id = ? AND status = ?", *transaction.CustomerID, enum.BELUM_LUNAS).
-				First(&debt).Error
-			var previousRemaining int64
-			switch {
-			case errors.Is(err, gorm.ErrRecordNotFound):
-				previousRemaining = 0
-
-				totalDebt := transaction.TotalTransaction
-				debt = domain.Debts{
-					CustomerID:    *transaction.CustomerID,
-					TotalDebt:     totalDebt,
-					RemainingDebt: totalDebt,
-					Status:        enum.BELUM_LUNAS,
-				}
-				if err := tx.Create(&debt).Error; err != nil {
-					return internalErr(fmt.Errorf("failed to create debt: %w", err))
-				}
-			case err != nil:
-				return internalErr(fmt.Errorf("failed to get debt: %w", err))
-			default:
-				previousRemaining = debt.RemainingDebt
-				if err := tx.Model(&domain.Debts{}).Where("id = ?", debt.ID).
-					Updates(map[string]interface{}{
-						"total_debt":     debt.TotalDebt + transaction.TotalTransaction,
-						"remaining_debt": debt.RemainingDebt + transaction.TotalTransaction,
-						"status":         enum.BELUM_LUNAS,
-					}).Error; err != nil {
-					return internalErr(fmt.Errorf("failed to update debt: %w", err))
-				}
-				debt.TotalDebt += transaction.TotalTransaction
-				debt.RemainingDebt += transaction.TotalTransaction
-				debt.Status = enum.BELUM_LUNAS
+			debt, err := addToOpenDebt(tx, *transaction.CustomerID, transaction.TotalTransaction, time.Time{})
+			if err != nil {
+				return err
 			}
 			transaction.DebtID = &debt.ID
 			debtSnapshot = &domain.TransactionDebtSnapshot{
 				DebtID:                debt.ID,
-				PreviousRemainingDebt: previousRemaining,
+				PreviousRemainingDebt: debt.RemainingDebt - transaction.TotalTransaction,
 				AmountAdded:           transaction.TotalTransaction,
 				TotalDebt:             debt.TotalDebt,
 				RemainingDebt:         debt.RemainingDebt,

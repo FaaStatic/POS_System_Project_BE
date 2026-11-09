@@ -135,3 +135,29 @@ func TestSyncOfflineTransactions(t *testing.T) {
 		t.Errorf("lookup failure: %+v; want retryable failure", r)
 	}
 }
+
+func TestSyncOfflineTransactionsReportsDebtBalance(t *testing.T) {
+	productID := uuid.New()
+	repo := &fakeSyncTrxRepo{}
+	repo.createDebtSnap = &domain.TransactionDebtSnapshot{
+		DebtID: uuid.New(), PreviousRemainingDebt: 2000, AmountAdded: 3500, TotalDebt: 9000, RemainingDebt: 5500,
+	}
+	prodRepo := &fakeTrxProductRepo{products: map[uuid.UUID]*domain.Products{
+		productID: {ID: productID, ProductName: "Gula", SellingPrice: 15000, SellingPriceDebt: 16000},
+	}}
+	user := validUser()
+	u := newTestTransactionUsecase(&repo.fakeTrxRepo, prodRepo, &fakeTrxUserRepo{user: user})
+	u.trxRepo = repo
+
+	resp, err := u.SyncOfflineTransactions(context.Background(), &requestdto.SyncTransactionsRequest{
+		UserId:       user.ID.String(),
+		Transactions: []requestdto.OfflineTransaction{offlineItem(uuid.NewString(), productID.String())},
+	})
+	if err != nil {
+		t.Fatalf("sync returned error: %v", err)
+	}
+	info := resp.Results[0].DebtInfo
+	if info == nil || info.PreviousRemainingDebt != 2000 || info.RemainingDebt != 5500 {
+		t.Errorf("debt_info = %+v; want the snapshot's before and after balance", info)
+	}
+}
