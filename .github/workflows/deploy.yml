@@ -69,7 +69,7 @@ jobs:
           cache: true
 
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
       # .dockerfile menyalin swagger.json yang tidak ada di git (lihat .gitignore).
       - name: Generate swagger.json
