@@ -59,9 +59,13 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.sha }}
           persist-credentials: false
+      # Toolchain sama dengan yang membangun image (ARG di .dockerfile), bukan versi minimum di go.mod,
+      # supaya govulncheck memindai stdlib yang benar-benar dikirim.
+      - id: gover
+        run: echo "version=$(sed -n 's/^ARG GO_VERSION=//p' .dockerfile)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version: ${{ steps.gover.outputs.version }}
           cache: true
 
       - name: govulncheck
