@@ -1,0 +1,155 @@
+name: deploy
+
+# master: otomatis setelah workflow "ci" hijau.
+# dev: hanya manual (Actions > deploy > Run workflow > pilih branch dev) -> staging.
+# Urutan: cek versi terpasang -> migrate DB -> deploy -> healthcheck di server -> tes lewat domain
+# publik. Gagal di langkah mana pun setelah migrate: server/CI mengembalikan image ke versi sebelumnya.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: deploy-${{ github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/faastatic/pos-api
+
+jobs:
+  build:
+    # workflow_run juga terpicu oleh CI yang gagal atau PR; hanya push yang lulus yang lanjut.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      service: ${{ steps.target.outputs.service }}
+      environment: ${{ steps.target.outputs.environment }}
+      host: ${{ steps.target.outputs.host }}
+      tag: ${{ steps.target.outputs.tag }}
+    steps:
+      - id: target
+        env:
+          BRANCH: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          case "$BRANCH" in
+            master) service=api;         environment=production; host=api.toko-novi.my.id ;;
+            dev)    service=api-staging; environment=staging;    host=api-staging.toko-novi.my.id ;;
+            *) echo "branch $BRANCH tidak boleh di-deploy" >&2; exit 1 ;;
+          esac
+          {
+            echo "service=$service"
+            echo "environment=$environment"
+            echo "host=$host"
+            echo "sha=$SHA"
+            echo "tag=sha-${SHA::12}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.target.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      # .dockerfile menyalin swagger.json yang tidak ada di git (lihat .gitignore).
+      - name: Generate swagger.json
+        run: |
+          go install github.com/swaggo/swag/cmd/swag@v1.16.4
+          make swagger
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .dockerfile
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.target.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Secret VPS_SSH_KEY diisi per environment: production = gha-be-prod, staging = gha-be-staging.
+    environment: ${{ needs.build.outputs.environment }}
+    permissions:
+      packages: read
+    env:
+      SERVICE: ${{ needs.build.outputs.service }}
+      TAG: ${{ needs.build.outputs.tag }}
+      API_HOST: ${{ needs.build.outputs.host }}
+    steps:
+      - name: Siapkan SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.VPS_HOST }}
+          DEPLOY_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+          {
+            echo "Host vps"
+            echo "  HostName $DEPLOY_HOST"
+            echo "  Port $DEPLOY_PORT"
+            echo "  User deploy"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  IdentitiesOnly yes"
+            echo "  StrictHostKeyChecking yes"
+            echo "  ServerAliveInterval 30"
+          } > ~/.ssh/config
+
+      - name: Cek versi terpasang
+        run: |
+          echo "Versi baru: $TAG"
+          ssh vps "status $SERVICE"
+
+      # Di server (deploy.sh): migrate DB -> up -d -> healthcheck; gagal -> kembali ke versi sebelumnya.
+      - name: Migrate dan deploy
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: printf '%s' "$GHCR_TOKEN" | ssh vps "deploy $SERVICE $TAG $OWNER"
+
+      - name: Tes lewat domain publik
+        id: smoke
+        run: |
+          # Login dengan body kosong: harus ditolak aplikasi (4xx), bukan 502/5xx dari nginx.
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST \
+              -H 'Content-Type: application/json' -d '{}' "https://$API_HOST/api/v1/account/auth/login" || true)
+            case "$code" in
+              400|401|403|422|429) echo "OK (HTTP $code)"; exit 0 ;;
+            esac
+            echo "percobaan $i: HTTP $code"; sleep 3
+          done
+          exit 1
+
+      # Migrasi DB tidak ikut dibatalkan: migration harus kompatibel dengan versi aplikasi sebelumnya.
+      - name: Rollback ke versi sebelumnya
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: ssh vps "rollback $SERVICE"
