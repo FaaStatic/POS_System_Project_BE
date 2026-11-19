@@ -59,17 +59,13 @@ jobs:
         with:
           ref: ${{ steps.target.outputs.sha }}
           persist-credentials: false
-      # Toolchain sama dengan yang membangun image (ARG di .dockerfile), bukan versi minimum di go.mod,
-      # supaya govulncheck memindai stdlib yang benar-benar dikirim.
-      - id: gover
-        run: echo "version=$(sed -n 's/^ARG GO_VERSION=//p' .dockerfile)" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-go@v5
         with:
-          go-version: ${{ steps.gover.outputs.version }}
+          go-version-file: go.mod
           cache: true
 
       - name: govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
       # .dockerfile menyalin swagger.json yang tidak ada di git (lihat .gitignore).
       - name: Generate swagger.json
